@@ -131,7 +131,7 @@ const GameApp: React.FC = () => {
                 const final = Math.floor(Math.random() * 20) + 1;
                 setDiceResult(final);
                 setIsRolling(false);
-                handleAction(`[系统: 投掷了 D20 骰子，结果: ${final}]`);
+                handleAction(`[System: 投掷了 D20 骰子，结果: ${final}]`);
             } else {
                 setDiceResult(Math.floor(Math.random() * 20) + 1);
                 requestAnimationFrame(animate);
@@ -146,7 +146,7 @@ const GameApp: React.FC = () => {
         // 1. Add User/System Action to Log
         const userLog: GameLog = {
             id: `log-${Date.now()}`,
-            role: actionText.startsWith('[系统') ? 'system' : 'player',
+            role: actionText.startsWith('[System') ? 'system' : 'player',
             speakerName: userProfile.name,
             content: actionText,
             timestamp: Date.now(),
@@ -168,52 +168,48 @@ const GameApp: React.FC = () => {
             let playerContext = "";
             for (const p of players) {
                 // FIXED: Include detailed memories (true) so characters act based on history
-                playerContext += `\n<<< 角色档案 (Player Character): ${p.name} >>>\n${ContextBuilder.buildCoreContext(p, userProfile, true)}\n`;
+                playerContext += `\n<<< 角色档案 (Player Character): ${p.name} (ID: ${p.id}) >>>\n${ContextBuilder.buildCoreContext(p, userProfile, true)}\n`;
             }
 
-            const prompt = `### TRPG Mode (Tabletop Role-Playing Game)
-**World Setting**: ${activeGame.worldSetting}
-**Current Location**: ${activeGame.status.location}
-**Party Status**: HP ${activeGame.status.health}% | Inventory: ${activeGame.status.inventory.join(', ') || 'Empty'}
+            const prompt = `### TRPG 跑团模式 (Tabletop Role-Playing Game)
+**世界观**: ${activeGame.worldSetting}
+**当前地点**: ${activeGame.status.location}
+**队伍状态**: HP ${activeGame.status.health}% | 物品栏: ${activeGame.status.inventory.join(', ') || '空'}
 
-### Party Members (AI Controlled)
-${players.map(p => `- ${p.name}`).join('\n')}
+### 队伍成员 (AI 扮演)
+${players.map(p => `- ${p.name} (ID: ${p.id})`).join('\n')}
 
-### User (Player)
+### 玩家 (User)
 ${userProfile.name}
 
-### Character Contexts (Identity & Memories)
+### 角色档案与记忆 (Character Contexts)
 ${playerContext}
 
-### Recent Logs
+### 最近记录 (Recent Logs)
 ${updatedLogs.slice(-10).map(l => `[${l.role === 'gm' ? 'GM' : (l.speakerName || 'System')}]: ${l.content}`).join('\n')}
 
-### Task: Generate Response
-You need to generate the response in **Strict JSON format**.
-The response must contain two distinct parts:
-1. **GM (Game Master)**: Determine the outcome of the user's action. Describe the scene changes, enemy actions, or loot found. Be objective but descriptive.
-2. **Characters (Reactions)**: Each character in the party MUST react to the situation or the user's action.
-   - **Dialogue**: A short sentence. Can be a complaint ("吐槽"), a joke, advice, or an emotional reaction.
-   - **Action**: A distinct physical action.
+### 任务：生成剧情响应
+请根据玩家的行动，生成剧情发展和角色的反应。
+**必须**包含以下两部分：
+1. **GM (主持人)**: 判定玩家行动的结果。描述环境变化、敌人行动或发现的物品。客观、沉浸。
+2. **角色反应 (Reactions)**: 队伍中的 **每一位** 角色都**必须**对当前情况或玩家的行动做出反应。
+   - **对话 (Dialogue)**: 一句简短的台词。可以是吐槽、建议、情感表达或战术交流。
+   - **动作 (Action)**: 一个具体的肢体动作。
 
-### Output Format (Strict JSON)
+### 输出格式 (Strict JSON)
+请仅输出 JSON，不要包含markdown代码块。
 {
-  "gm_narrative": "GM's description of the outcome...",
+  "gm_narrative": "GM的剧情描述 (中文)...",
   "characters": [
     { 
-      "charId": "id_of_character_1", 
-      "action": "e.g. sighs and draws sword", 
-      "dialogue": "e.g. Here we go again..." 
-    },
-    { 
-      "charId": "id_of_character_2", 
-      "action": "...", 
-      "dialogue": "..." 
+      "charId": "角色的ID (必须与上方列表一致)", 
+      "action": "动作描述 (中文)", 
+      "dialogue": "台词内容 (中文)" 
     }
   ],
-  "newLocation": "Optional new location",
+  "newLocation": "可选：新地点名称",
   "hpChange": 0,
-  "newItem": "Optional item name"
+  "newItem": "可选：获得的物品名称"
 }
 `;
 
@@ -250,8 +246,7 @@ The response must contain two distinct parts:
                     for (const charAct of res.characters) {
                         const char = players.find(p => p.id === charAct.charId);
                         if (char) {
-                            // Combine action and dialogue for display, or keep separate?
-                            // Let's format it nicely: "*Action* Dialogue"
+                            // Format: "*Action* “Dialogue”"
                             const combinedContent = `*${charAct.action}* “${charAct.dialogue}”`;
                             
                             newLogs.push({
