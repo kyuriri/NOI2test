@@ -646,6 +646,19 @@ export const DB = {
       transaction.objectStore(STORE_GAMES).delete(id);
   },
 
+  // --- Helper for Sequential Export ---
+  getRawStoreData: async (storeName: string): Promise<any[]> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(storeName)) return [];
+      return new Promise((resolve, reject) => {
+          const transaction = db.transaction(storeName, 'readonly');
+          const store = transaction.objectStore(storeName);
+          const request = store.getAll();
+          request.onsuccess = () => resolve(request.result || []);
+          request.onerror = () => reject(request.error);
+      });
+  },
+
   // --- Bulk Export/Import ---
   
   exportFullData: async (): Promise<Partial<FullBackupData>> => {

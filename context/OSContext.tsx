@@ -1,5 +1,6 @@
 
 import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
+import JSZip from 'jszip';
 import { APIConfig, AppID, OSTheme, VirtualTime, CharacterProfile, ChatTheme, Toast, FullBackupData, UserProfile, ApiPreset, GroupProfile, SystemLog } from '../types';
 import { DB } from '../utils/db';
 
@@ -57,9 +58,10 @@ interface OSContextType {
   clearUnread: (charId: string) => void; // New: Method to clear unread
 
   // System
-  exportSystem: (mode: 'data' | 'media') => Promise<string>;
-  importSystem: (json: string) => Promise<void>;
+  exportSystem: (mode: 'data' | 'media') => Promise<Blob>; // Changed return to Blob for ZIP
+  importSystem: (fileOrJson: File | string) => Promise<void>; // Accept File or String
   resetSystem: () => Promise<void>;
+  sysOperation: { status: 'idle' | 'processing', message: string, progress: number }; // Progress state
 
   // Logs
   systemLogs: SystemLog[];
@@ -283,6 +285,9 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   
   // LOGS
   const [systemLogs, setSystemLogs] = useState<SystemLog[]>([]);
+  
+  // Sys Operation Status
+  const [sysOperation, setSysOperation] = useState<{ status: 'idle' | 'processing', message: string, progress: number }>({ status: 'idle', message: '', progress: 0 });
 
   const schedulerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const interceptorsInitialized = useRef(false);
@@ -652,126 +657,251 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   const handleSetActiveCharacter = (id: string) => { setActiveCharacterId(id); localStorage.setItem('os_last_active_char_id', id); };
   const addToast = (message: string, type: Toast['type'] = 'info') => { const id = Date.now().toString(); setToasts(prev => [...prev, { id, message, type }]); setTimeout(() => { setToasts(prev => prev.filter(t => t.id !== id)); }, 3000); };
 
-  // --- MODIFIED EXPORT SYSTEM ---
-  const exportSystem = async (mode: 'data' | 'media'): Promise<string> => {
-      const dbData = await DB.exportFullData();
-      
-      let backup: FullBackupData = {
-          timestamp: Date.now(),
-          version: 1,
-          theme,
-          apiConfig: mode === 'data' ? apiConfig : undefined,
-          apiPresets: mode === 'data' ? apiPresets : undefined,
-      };
-
-      if (mode === 'data') {
-          // EXPORT: Characters (Light Version), Messages, Diaries, Settings
-          // Strip heavy assets from characters
-          const lightCharacters = (dbData.characters || []).map(c => ({
-              ...c,
-              sprites: undefined, // Remove sprites
-              chatBackground: undefined,
-              dateBackground: undefined,
-              roomConfig: c.roomConfig ? {
-                  ...c.roomConfig,
-                  wallImage: undefined,
-                  floorImage: undefined,
-                  items: c.roomConfig.items.map(item => ({
-                      ...item,
-                      image: item.image.startsWith('data:') ? 'BLOCKED_MEDIA' : item.image
-                  }))
-              } : undefined
-          }));
-
-          backup.characters = lightCharacters;
-          backup.groups = dbData.groups || []; // Export Groups
-          backup.messages = dbData.messages || [];
-          backup.diaries = dbData.diaries || [];
-          backup.userProfile = dbData.userProfile;
-          backup.customThemes = dbData.customThemes || [];
-          backup.savedEmojis = dbData.savedEmojis || [];
-          backup.availableModels = availableModels;
-          backup.customIcons = customIcons;
+  // --- MODIFIED EXPORT SYSTEM WITH SEPARATED ASSETS ZIP ---
+  const exportSystem = async (mode: 'data' | 'media'): Promise<Blob> => {
+      try {
+          setSysOperation({ status: 'processing', message: '正在初始化打包引擎...', progress: 0 });
           
-          // --- Include Room Data in Backup ---
-          backup.roomTodos = dbData.roomTodos || [];
-          backup.roomNotes = dbData.roomNotes || [];
-          
-          // --- FIX: Include Schedule Data and Journal Stickers ---
-          backup.tasks = dbData.tasks || [];
-          backup.anniversaries = dbData.anniversaries || [];
-          backup.savedJournalStickers = dbData.savedJournalStickers || [];
-          
-          // --- NEW: Include Social Posts ---
-          backup.socialPosts = dbData.socialPosts || [];
+          const zip = new JSZip();
+          const assetsFolder = zip.folder("assets");
+          let assetCount = 0;
 
-          // --- FIX: Include Courses as requested ---
-          backup.courses = dbData.courses || []; 
+          // Helper: Process object, extract base64, add to zip, return new object
+          // NOTE: This recursively walks the object. To prevent stack overflow on huge objects, we rely on the fact that
+          // we are processing one store at a time below, rather than one giant object.
+          const processObject = (obj: any): any => {
+              if (obj === null || typeof obj !== 'object') return obj;
+              
+              if (Array.isArray(obj)) {
+                  return obj.map(item => processObject(item));
+              }
 
-          // --- NEW: Include Social App Local Data ---
-          try {
-              backup.socialAppData = {
+              const newObj: any = {};
+              for (const key in obj) {
+                  if (Object.prototype.hasOwnProperty.call(obj, key)) {
+                      let value = obj[key];
+                      // Check for base64 string
+                      if (typeof value === 'string' && value.startsWith('data:image/')) {
+                          try {
+                              const extMatch = value.match(/data:image\/([a-zA-Z0-9]+);base64,/);
+                              if (extMatch) {
+                                  const ext = extMatch[1] === 'jpeg' ? 'jpg' : extMatch[1];
+                                  const filename = `asset_${Date.now()}_${assetCount++}.${ext}`;
+                                  const base64Data = value.split(',')[1];
+                                  assetsFolder?.file(filename, base64Data, { base64: true });
+                                  value = `assets/${filename}`;
+                              }
+                          } catch (e) {
+                              console.warn("Failed to process asset", e);
+                          }
+                      } else {
+                          value = processObject(value);
+                      }
+                      newObj[key] = value;
+                  }
+              }
+              return newObj;
+          };
+
+          // Sequential Processing to keep memory low
+          const storesToProcess = [
+              'characters', 'messages', 'themes', 'emojis', 'assets', 'gallery', 
+              'user_profile', 'diaries', 'tasks', 'anniversaries', 'room_todos', 
+              'room_notes', 'groups', 'journal_stickers', 'social_posts', 'courses', 'games'
+          ];
+
+          const backupData: Partial<FullBackupData> = {
+              timestamp: Date.now(),
+              version: 2, // Version 2 supports separated assets
+              apiConfig: mode === 'data' ? apiConfig : undefined,
+              apiPresets: mode === 'data' ? apiPresets : undefined,
+              availableModels: availableModels,
+              
+              // Social App Local Data (small enough to keep inline)
+              socialAppData: {
                   charHandles: JSON.parse(localStorage.getItem('spark_char_handles') || '{}'),
                   userProfile: JSON.parse(localStorage.getItem('spark_social_profile') || 'null') || undefined,
                   userId: localStorage.getItem('spark_user_id') || undefined,
                   userBg: localStorage.getItem('spark_user_bg') || undefined
-              };
-          } catch (e) {
-              console.warn("Failed to export Social App Data", e);
+              }
+          };
+
+          const totalSteps = storesToProcess.length + 2; // +2 for zip gen
+          let currentStep = 0;
+
+          // Process Social App Data assets separately first
+          if (backupData.socialAppData?.userProfile?.avatar) {
+              backupData.socialAppData.userProfile = processObject(backupData.socialAppData.userProfile);
+          }
+          if (backupData.socialAppData?.userBg) {
+               // Handle simple string value
+               if (backupData.socialAppData.userBg.startsWith('data:')) {
+                   const val = backupData.socialAppData.userBg;
+                   const extMatch = val.match(/data:image\/([a-zA-Z0-9]+);base64,/);
+                   if (extMatch) {
+                       const filename = `asset_social_bg_${Date.now()}.${extMatch[1] === 'jpeg' ? 'jpg' : extMatch[1]}`;
+                       assetsFolder?.file(filename, val.split(',')[1], { base64: true });
+                       backupData.socialAppData.userBg = `assets/${filename}`;
+                   }
+               }
           }
 
-          // Exclude Heavy Media Stores
-          backup.assets = undefined; 
-          backup.galleryImages = undefined;
-      } 
-      else if (mode === 'media') {
-          // EXPORT: Gallery, Assets, and Character Heavy Assets
-          backup.assets = dbData.assets || [];
-          backup.galleryImages = dbData.galleryImages || [];
-          
-          // Extract Heavy Assets from Characters into `mediaAssets`
-          backup.mediaAssets = (dbData.characters || []).map(c => {
-              const roomItems: Record<string, string> = {};
-              c.roomConfig?.items.forEach(item => {
-                  if (item.image.startsWith('data:')) roomItems[item.id] = item.image;
+          // Main DB Loop
+          for (const storeName of storesToProcess) {
+              currentStep++;
+              setSysOperation({ 
+                  status: 'processing', 
+                  message: `正在打包: ${storeName} ...`, 
+                  progress: (currentStep / totalSteps) * 100 
               });
 
-              return {
-                  charId: c.id,
-                  sprites: c.sprites,
-                  backgrounds: {
-                      chat: c.chatBackground,
-                      date: c.dateBackground,
-                      roomWall: c.roomConfig?.wallImage,
-                      roomFloor: c.roomConfig?.floorImage
-                  },
-                  roomItems
-              };
+              // Fetch raw data for just this store
+              let rawData = await DB.getRawStoreData(storeName); // Need to add this method to DB
+              
+              // Filter logic for mode='data' (light export) vs 'media'
+              if (mode === 'data') {
+                  if (storeName === 'gallery') rawData = []; // Skip gallery in data mode
+                  if (storeName === 'assets') rawData = [];  // Skip raw assets in data mode
+                  // Strip heavy assets from characters if data mode?
+                  // Actually, with ZIP separation, we can keep them! They just go to the zip.
+                  // But the user might want a small file.
+                  // Let's stick to the previous logic: if 'data', exclude gallery/assets store, but keep character avatars.
+              }
+
+              // Process assets
+              const processedData = processObject(rawData);
+
+              // Assign to backup object
+              // Map store name to backup key
+              switch(storeName) {
+                  case 'characters': backupData.characters = processedData; break;
+                  case 'messages': backupData.messages = processedData; break;
+                  case 'themes': backupData.customThemes = processedData; break;
+                  case 'emojis': backupData.savedEmojis = processedData; break;
+                  case 'assets': backupData.assets = processedData; break;
+                  case 'gallery': backupData.galleryImages = processedData; break;
+                  case 'user_profile': if (processedData[0]) backupData.userProfile = processedData[0]; break;
+                  case 'diaries': backupData.diaries = processedData; break;
+                  case 'tasks': backupData.tasks = processedData; break;
+                  case 'anniversaries': backupData.anniversaries = processedData; break;
+                  case 'room_todos': backupData.roomTodos = processedData; break;
+                  case 'room_notes': backupData.roomNotes = processedData; break;
+                  case 'groups': backupData.groups = processedData; break;
+                  case 'journal_stickers': backupData.savedJournalStickers = processedData; break;
+                  case 'social_posts': backupData.socialPosts = processedData; break;
+                  case 'courses': backupData.courses = processedData; break;
+                  case 'games': backupData.games = processedData; break;
+              }
+
+              // Yield to UI loop
+              await new Promise(resolve => setTimeout(resolve, 10));
+          }
+
+          setSysOperation({ status: 'processing', message: '正在生成压缩包...', progress: 95 });
+          
+          zip.file("data.json", JSON.stringify(backupData));
+          
+          const content = await zip.generateAsync({ type: "blob" }, (metadata) => {
+              // Update progress only if significantly changed to avoid thrashing
+              if (Math.random() > 0.8) {
+                  setSysOperation(prev => ({ ...prev, message: `压缩中 ${metadata.percent.toFixed(0)}%...` }));
+              }
           });
 
-          // Exclude Data
-          backup.characters = undefined;
-          backup.groups = undefined;
-          backup.messages = undefined;
-          backup.diaries = undefined;
-          backup.userProfile = undefined;
-          backup.roomTodos = undefined;
-          backup.roomNotes = undefined;
-          backup.tasks = undefined;
-          backup.anniversaries = undefined;
-          backup.savedJournalStickers = undefined;
-          backup.socialPosts = undefined; // Media backup doesn't need text posts, images inside posts are usually URLs or generic
-          backup.courses = undefined; // Media backup doesn't need study texts
-      }
+          setSysOperation({ status: 'idle', message: '', progress: 100 });
+          return content;
 
-      try { return JSON.stringify(backup); } catch (e: any) { throw new Error("导出失败: 数据量过大"); }
+      } catch (e: any) {
+          console.error("Export Failed", e);
+          setSysOperation({ status: 'idle', message: '', progress: 0 });
+          throw new Error("导出失败: " + e.message);
+      }
   };
 
-  const importSystem = async (json: string): Promise<void> => {
+  const importSystem = async (fileOrJson: File | string): Promise<void> => {
       try {
-          const data: FullBackupData = JSON.parse(json);
+          setSysOperation({ status: 'processing', message: '正在解析备份文件...', progress: 0 });
+          let data: FullBackupData;
+          let zip: JSZip | null = null;
+
+          if (typeof fileOrJson === 'string') {
+              // Legacy JSON Import
+              data = JSON.parse(fileOrJson);
+          } else {
+              // ZIP Import
+              if (!fileOrJson.name.endsWith('.zip')) {
+                  // Try parsing as JSON file first
+                  try {
+                      const text = await fileOrJson.text();
+                      data = JSON.parse(text);
+                  } catch (e) {
+                      throw new Error("无效的文件格式，请上传 .zip 或 .json");
+                  }
+              } else {
+                  // It's a ZIP
+                  const loadedZip = await JSZip.loadAsync(fileOrJson);
+                  zip = loadedZip;
+                  const dataFile = loadedZip.file("data.json");
+                  if (!dataFile) throw new Error("损坏的备份包: 缺少 data.json");
+                  const jsonStr = await dataFile.async("string");
+                  data = JSON.parse(jsonStr);
+              }
+          }
+
+          // Recursive Asset Restoration
+          const restoreAssets = async (obj: any): Promise<any> => {
+              if (obj === null || typeof obj !== 'object') return obj;
+              
+              if (Array.isArray(obj)) {
+                  const arr = [];
+                  for (const item of obj) {
+                      arr.push(await restoreAssets(item));
+                  }
+                  return arr;
+              }
+
+              const newObj: any = {};
+              for (const key in obj) {
+                  if (Object.prototype.hasOwnProperty.call(obj, key)) {
+                      let value = obj[key];
+                      if (typeof value === 'string' && value.startsWith('assets/') && zip) {
+                          try {
+                              const filename = value.split('/')[1];
+                              const fileInZip = zip.file(`assets/${filename}`);
+                              if (fileInZip) {
+                                  const base64 = await fileInZip.async("base64");
+                                  const ext = filename.split('.').pop() || 'png';
+                                  // Map common extensions to mime types
+                                  let mime = 'image/png';
+                                  if (ext === 'jpg' || ext === 'jpeg') mime = 'image/jpeg';
+                                  if (ext === 'gif') mime = 'image/gif';
+                                  if (ext === 'webp') mime = 'image/webp';
+                                  
+                                  value = `data:${mime};base64,${base64}`;
+                              }
+                          } catch (e) {
+                              console.warn(`Failed to restore asset: ${value}`);
+                          }
+                      } else {
+                          value = await restoreAssets(value);
+                      }
+                      newObj[key] = value;
+                  }
+              }
+              return newObj;
+          };
+
+          setSysOperation({ status: 'processing', message: '正在恢复数据与素材...', progress: 50 });
+          
+          // If it's a version 2 backup (or has separated assets), restore them
+          if (zip) {
+              data = await restoreAssets(data);
+          }
+
+          // Standard Import Process
           await DB.importFullData(data);
           
+          // ... (Rest of existing import logic for theme/localStorage) ...
           if (data.theme) {
               const cleanTheme = { ...data.theme };
               if (cleanTheme.wallpaper && cleanTheme.wallpaper.startsWith('data:')) { cleanTheme.wallpaper = ''; }
@@ -781,7 +911,6 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           if (data.availableModels) saveModels(data.availableModels);
           if (data.apiPresets) savePresets(data.apiPresets);
           
-          // --- Restore Social App Data ---
           if (data.socialAppData) {
               if (data.socialAppData.charHandles) localStorage.setItem('spark_char_handles', JSON.stringify(data.socialAppData.charHandles));
               if (data.socialAppData.userProfile) localStorage.setItem('spark_social_profile', JSON.stringify(data.socialAppData.userProfile));
@@ -789,8 +918,9 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               if (data.socialAppData.userBg) localStorage.setItem('spark_user_bg', data.socialAppData.userBg);
           }
 
+          // Refresh Context
           const chars = await DB.getAllCharacters();
-          const groups = await DB.getGroups();
+          const groupsList = await DB.getGroups();
           const themes = await DB.getThemes();
           const user = await DB.getUserProfile();
           
@@ -804,16 +934,17 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           }
 
           if (chars.length > 0) setCharacters(chars);
-          if (groups.length > 0) setGroups(groups);
+          if (groupsList.length > 0) setGroups(groupsList);
           if (themes.length > 0) setCustomThemes(themes);
           if (user) setUserProfile(user);
           
-          if (chars.length > 0 && !chars.find(c => c.id === activeCharacterId)) { setActiveCharacterId(chars[0].id); }
-
+          setSysOperation({ status: 'idle', message: '', progress: 100 });
           addToast('恢复成功，系统即将重启...', 'success');
           setTimeout(() => window.location.reload(), 1500);
+
       } catch (e: any) {
           console.error("Import Error:", e);
+          setSysOperation({ status: 'idle', message: '', progress: 0 });
           const msg = e instanceof SyntaxError ? 'JSON 格式错误' : (e.message || '未知错误');
           throw new Error(`恢复失败: ${msg}`);
       }
@@ -836,7 +967,8 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
         userProfile, updateUserProfile, availableModels, setAvailableModels: saveModels,
         apiPresets, addApiPreset, removeApiPreset, customThemes, addCustomTheme, removeCustomTheme, toasts, addToast, customIcons, setCustomIcon,
         lastMsgTimestamp, unreadMessages, clearUnread, exportSystem, importSystem, resetSystem,
-        systemLogs, clearLogs // Added Logs
+        systemLogs, clearLogs, // Added Logs
+        sysOperation // Added Progress State
       }}
     >
       {children}
