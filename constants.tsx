@@ -105,7 +105,7 @@ export const INSTALLED_APPS: AppConfig[] = [
   { id: AppID.Journal, name: '交换日记', icon: 'Journal', color: 'amber' },
   { id: AppID.Date, name: '见面', icon: 'Date', color: 'pink' },
   { id: AppID.Study, name: '自习室', icon: 'Study', color: 'emerald' }, 
-  { id: AppID.Game, name: '异界罗盘', icon: 'Game', color: 'orange' }, // New Game App
+  { id: AppID.Game, name: 'TRPG', icon: 'Game', color: 'orange' }, // Renamed from 异界罗盘
   { id: AppID.FAQ, name: '使用帮助', icon: 'FAQ', color: 'indigo' },
   { id: AppID.Gallery, name: '相册', icon: 'Gallery', color: 'orange' },
   { id: AppID.ThemeMaker, name: '气泡工坊', icon: 'ThemeMaker', color: 'purple' },

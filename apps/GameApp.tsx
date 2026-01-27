@@ -6,31 +6,34 @@ import { GameSession, GameTheme, CharacterProfile, GameLog, GameActionOption } f
 import { ContextBuilder } from '../utils/context';
 import Modal from '../components/os/Modal';
 
-// --- Themes Configuration ---
-const GAME_THEMES: Record<GameTheme, { bg: string, text: string, accent: string, font: string, border: string, cardBg: string }> = {
+// --- Themes Configuration (Enhanced) ---
+const GAME_THEMES: Record<GameTheme, { bg: string, text: string, accent: string, font: string, border: string, cardBg: string, gradient: string }> = {
     fantasy: {
-        bg: 'bg-[#fdf6e3]',
-        text: 'text-[#433422]',
-        accent: 'text-[#c2410c]',
+        bg: 'bg-[#1a120b]',
+        text: 'text-[#e5e5e5]',
+        accent: 'text-[#fbbf24]',
         font: 'font-serif',
-        border: 'border-[#d4c4a8]',
-        cardBg: 'bg-[#f5e6d3]'
+        border: 'border-[#78350f]',
+        cardBg: 'bg-[#2a2018]',
+        gradient: 'from-[#451a03] to-[#1a120b]'
     },
     cyber: {
-        bg: 'bg-[#0b1120]',
+        bg: 'bg-[#020617]',
         text: 'text-[#94a3b8]',
-        accent: 'text-[#06b6d4]',
+        accent: 'text-[#22d3ee]',
         font: 'font-mono',
         border: 'border-[#1e293b]',
-        cardBg: 'bg-[#1e293b]/50'
+        cardBg: 'bg-[#0f172a]/80',
+        gradient: 'from-[#0f172a] to-[#020617]'
     },
     horror: {
-        bg: 'bg-[#1a0505]',
-        text: 'text-[#a1a1aa]',
+        bg: 'bg-[#0f0000]',
+        text: 'text-[#d4d4d8]',
         accent: 'text-[#ef4444]',
         font: 'font-serif',
         border: 'border-[#450a0a]',
-        cardBg: 'bg-[#2b0e0e]'
+        cardBg: 'bg-[#2b0e0e]',
+        gradient: 'from-[#450a0a] to-[#000000]'
     },
     modern: {
         bg: 'bg-slate-50',
@@ -38,8 +41,68 @@ const GAME_THEMES: Record<GameTheme, { bg: string, text: string, accent: string,
         accent: 'text-blue-600',
         font: 'font-sans',
         border: 'border-slate-200',
-        cardBg: 'bg-white'
+        cardBg: 'bg-white',
+        gradient: 'from-slate-100 to-white'
     }
+};
+
+// --- Markdown Renderer Component ---
+const GameMarkdown: React.FC<{ content: string, theme: any }> = ({ content, theme }) => {
+    // Helper: Parse Inline Styles (**bold**, *italic*, `code`)
+    const parseInline = (text: string) => {
+        const parts = text.split(/(\*\*.*?\*\*|\*.*?\*|`.*?`)/g);
+        return parts.map((part, i) => {
+            if (part.startsWith('**') && part.endsWith('**')) {
+                return <strong key={i} className={`font-bold ${theme.accent}`}>{part.slice(2, -2)}</strong>;
+            }
+            if (part.startsWith('*') && part.endsWith('*')) {
+                return <em key={i} className="italic opacity-70 text-[95%] mx-0.5">{part.slice(1, -1)}</em>;
+            }
+            if (part.startsWith('`') && part.endsWith('`')) {
+                return <code key={i} className="bg-black/20 px-1 py-0.5 rounded font-mono text-xs opacity-90 mx-0.5">{part.slice(1, -1)}</code>;
+            }
+            return <span key={i}>{part}</span>;
+        });
+    };
+
+    // Split by newlines to handle blocks
+    const lines = content.split('\n');
+
+    return (
+        <div className="space-y-2 text-justify">
+            {lines.map((line, i) => {
+                const trimmed = line.trim();
+                if (!trimmed) return <div key={i} className="h-1"></div>;
+                
+                // Headers
+                if (trimmed.startsWith('### ')) return <h3 key={i} className={`text-sm font-bold uppercase tracking-wider mt-3 mb-1 opacity-90 ${theme.accent}`}>{trimmed.slice(4)}</h3>;
+                if (trimmed.startsWith('## ')) return <h3 key={i} className="text-base font-bold mt-4 mb-2 opacity-95">{trimmed.slice(3)}</h3>;
+                if (trimmed.startsWith('# ')) return <h3 key={i} className="text-lg font-black mt-5 mb-3 text-center border-b border-current pb-2 opacity-90">{trimmed.slice(2)}</h3>;
+                
+                // Blockquotes
+                if (trimmed.startsWith('> ')) return <div key={i} className="border-l-2 border-current pl-3 py-1 my-2 italic opacity-70 text-xs bg-black/5 rounded-r">{parseInline(trimmed.slice(2))}</div>;
+                
+                // Lists
+                if (trimmed.startsWith('- ') || trimmed.startsWith('• ')) {
+                    return <div key={i} className="flex gap-2 pl-1"><span className={`opacity-50 ${theme.accent}`}>•</span><span>{parseInline(trimmed.slice(2))}</span></div>;
+                }
+
+                // Numbered list
+                const numMatch = trimmed.match(/^(\d+)\.\s+(.*)/);
+                if (numMatch) {
+                    return <div key={i} className="flex gap-2 pl-1"><span className={`font-mono opacity-60 ${theme.accent}`}>{numMatch[1]}.</span><span>{parseInline(numMatch[2])}</span></div>;
+                }
+
+                // Separator
+                if (trimmed === '---' || trimmed === '***') {
+                    return <div key={i} className="h-px bg-current opacity-20 my-4"></div>;
+                }
+
+                // Standard Paragraph
+                return <div key={i} className="leading-7 tracking-wide">{parseInline(trimmed)}</div>;
+            })}
+        </div>
+    );
 };
 
 const GameApp: React.FC = () => {
@@ -154,7 +217,7 @@ const GameApp: React.FC = () => {
             initialLogs.push({
                 id: 'init-gm',
                 role: 'gm',
-                content: `【序章: ${newTitle}】\n${res.gm_narrative || '冒险开始了...'}`,
+                content: `### 📖 序章: ${newTitle}\n\n${res.gm_narrative || '冒险开始了...'}`,
                 timestamp: Date.now()
             });
 
@@ -167,7 +230,7 @@ const GameApp: React.FC = () => {
                             id: `init-char-${char.id}`,
                             role: 'character',
                             speakerName: char.name,
-                            content: `*${charAct.action}* “${charAct.dialogue}”`,
+                            content: `*${charAct.action}* \n“${charAct.dialogue}”`,
                             timestamp: Date.now()
                         });
                     }
@@ -304,7 +367,7 @@ ${contextLogs.slice(-15).map(l => `[${l.role === 'gm' ? 'GM' : (l.speakerName ||
 2. **硬核 GM 风格**: 
    - **制造冲突**: 不要让旅途一帆风顺。安排陷阱、突发战斗、尴尬的社交场面、或者道德困境。
    - **环境描写**: 描述光影、气味、声音，营造沉浸感。
-   - **数值惩罚**: 如果玩家做出危险举动，请毫不留情地扣除 HP 或 SAN，并让队友对此表示震惊或无奈。
+   - **Markdown 排版**: 请在 \`gm_narrative\` 和 \`dialogue\` 中**积极使用 Markdown**。例如：使用 **加粗** 强调重点，使用 *斜体* 描述动作，使用列表描述环境物品。
 
 3. **生成选项 (Action Options)**:
    - 请根据当前局势，为玩家提供 3 个可选的行动建议。
@@ -315,12 +378,12 @@ ${contextLogs.slice(-15).map(l => `[${l.role === 'gm' ? 'GM' : (l.speakerName ||
 ### 📤 输出格式 (Strict JSON)
 请仅输出 JSON，不要包含 Markdown 代码块。
 {
-  "gm_narrative": "GM的剧情描述 (中文)...",
+  "gm_narrative": "GM的剧情描述 (支持Markdown)...",
   "characters": [
     { 
       "charId": "角色ID (必须对应上方列表)", 
-      "action": "动作描述 (e.g. 拔剑 / 躲到玩家身后 / 翻白眼)", 
-      "dialogue": "台词 (e.g. '喂！这也太危险了吧！')" 
+      "action": "动作描述", 
+      "dialogue": "台词" 
     }
   ],
   "newLocation": "新地点 (可选)",
@@ -368,8 +431,8 @@ ${contextLogs.slice(-15).map(l => `[${l.role === 'gm' ? 'GM' : (l.speakerName ||
                     for (const charAct of res.characters) {
                         const char = players.find(p => p.id === charAct.charId);
                         if (char) {
-                            // Format: "*Action* “Dialogue”"
-                            const combinedContent = `*${charAct.action}* “${charAct.dialogue}”`;
+                            // Format: "*Action* \n“Dialogue”"
+                            const combinedContent = `*${charAct.action}* \n“${charAct.dialogue}”`;
                             
                             newLogs.push({
                                 id: `char-${Date.now()}-${Math.random()}`,
@@ -485,43 +548,51 @@ ${contextLogs.slice(-15).map(l => `[${l.role === 'gm' ? 'GM' : (l.speakerName ||
         
         try {
             const players = characters.filter(c => activeGame.playerCharIds.includes(c.id));
-            const logText = activeGame.logs.slice(-20).map(l => `${l.role}: ${l.content}`).join('\n');
+            const playerNames = players.map(p => p.name).join('、');
+            // Increase log context for summary
+            const logText = activeGame.logs.slice(-30).map(l => `${l.role}: ${l.content}`).join('\n');
             
-            const prompt = `Task: Summarize this RPG session into a short memory fragment (1 sentence) for the character.
+            const prompt = `Task: Summarize the key events of this TRPG session into a short clause (what happened).
 Game: ${activeGame.title}
 Logs:
 ${logText}
-Output: A first-person memory summary in Chinese.`;
+Output: A concise summary in Chinese (e.g. "探索了地牢并击败了史莱姆"). No preamble.`;
 
             const response = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` },
                 body: JSON.stringify({
                     model: apiConfig.model,
-                    messages: [{ role: "user", content: prompt }]
+                    messages: [{ role: "user", content: prompt }],
+                    temperature: 0.5 // Lower temp for stability
                 })
             });
 
             if (response.ok) {
                 const data = await response.json();
-                const summary = data.choices[0].message.content.trim();
+                let summary = data.choices[0].message.content.trim();
+                summary = summary.replace(/[。\.]$/, ''); // Remove trailing dot
+
+                // Format: 【角色名们】和【用户名】一起玩了xxx，发生了xxxx
+                const memoryContent = `【${playerNames}】和【${userProfile.name}】一起玩了《${activeGame.title}》，发生了${summary}`;
                 
                 for (const p of players) {
                     const mem = {
-                        id: `mem-${Date.now()}`,
+                        id: `mem-${Date.now()}-${Math.random()}`,
                         date: new Date().toLocaleDateString(),
-                        summary: `[异界冒险: ${activeGame.title}] ${summary}`,
+                        summary: memoryContent,
                         mood: 'fun'
                     };
                     updateCharacter(p.id, { memories: [...(p.memories || []), mem] });
                 }
-                addToast('记忆已生成并归档', 'success');
+                addToast('记忆传递完成', 'success');
             }
         } catch (e) {
             console.error(e);
+            addToast('归档失败', 'error');
         } finally {
             setIsArchiving(false);
-            setView('lobby'); // Return to lobby
+            setView('lobby'); 
             setActiveGame(null);
         }
     };
@@ -537,41 +608,80 @@ Output: A first-person memory summary in Chinese.`;
 
     // --- Renderers ---
 
+    // 1. Lobby View (Redesigned)
     if (view === 'lobby') {
         return (
-            <div className="h-full w-full bg-slate-900 text-slate-200 flex flex-col font-sans">
-                <div className="h-16 flex items-center justify-between px-6 border-b border-slate-800 shrink-0 bg-slate-900/90 backdrop-blur z-10 sticky top-0">
-                    <button onClick={closeApp} className="p-2 -ml-2 hover:bg-slate-800 rounded-full"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" /></svg></button>
-                    <span className="font-bold tracking-widest text-lg text-orange-500">异界罗盘</span>
-                    <button onClick={() => setView('create')} className="bg-orange-600 text-white px-3 py-1 rounded text-xs font-bold hover:bg-orange-500 shadow-lg shadow-orange-900/20 active:scale-95 transition-transform">NEW GAME</button>
+            <div className="h-full w-full bg-[#0a0a0a] flex flex-col font-sans relative overflow-hidden">
+                {/* Ambient Background */}
+                <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-indigo-900/20 via-slate-900/50 to-black z-0"></div>
+                <div className="absolute inset-0 z-0 opacity-20" style={{ backgroundImage: 'url("https://www.transparenttextures.com/patterns/stardust.png")' }}></div>
+
+                {/* Header */}
+                <div className="h-20 flex items-end justify-between px-6 pb-4 shrink-0 z-10">
+                    <button onClick={closeApp} className="p-2 -ml-2 hover:bg-white/10 rounded-full text-white/70 transition-colors">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" /></svg>
+                    </button>
+                    <span className="font-black tracking-[0.2em] text-xl text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-600">TRPG ADVENTURE</span>
+                    <button onClick={() => setView('create')} className="w-10 h-10 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center text-white border border-white/10 shadow-lg active:scale-95 transition-all hover:bg-white/20">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
+                    </button>
                 </div>
-                <div className="p-6 grid grid-cols-1 gap-4 overflow-y-auto no-scrollbar">
-                    {games.length === 0 && <div className="text-center text-slate-600 mt-20 text-sm flex flex-col items-center gap-2"><span className="text-4xl opacity-50">🎲</span>暂无存档，开始新的冒险吧。</div>}
-                    {games.map(g => (
-                        <div key={g.id} onClick={() => { setActiveGame(g); setView('play'); }} className="bg-slate-800 border border-slate-700 p-4 rounded-xl cursor-pointer hover:border-orange-500 transition-all relative group active:scale-[0.98]">
-                            <div className="flex justify-between mb-2">
-                                <h3 className="font-bold text-lg text-slate-200">{g.title}</h3>
-                                <span className="text-[10px] bg-black/30 px-2 py-1 rounded text-slate-400 uppercase font-mono">{g.theme}</span>
-                            </div>
-                            <p className="text-xs text-slate-500 line-clamp-2 mb-4 leading-relaxed font-serif italic">"{g.worldSetting}"</p>
-                            <div className="flex justify-between items-end border-t border-slate-700/50 pt-3">
-                                <div className="flex items-center gap-2">
-                                    <div className="flex -space-x-2">
-                                        {characters.filter(c => g.playerCharIds.includes(c.id)).map(c => (
-                                            <img key={c.id} src={c.avatar} className="w-6 h-6 rounded-full border border-slate-800 object-cover" />
-                                        ))}
-                                    </div>
-                                    <span className="text-[10px] text-slate-500">Last played: {new Date(g.lastPlayedAt).toLocaleDateString()}</span>
-                                </div>
-                            </div>
-                            <button onClick={(e) => handleDeleteGame(e, g.id)} className="absolute top-2 right-2 p-1.5 text-slate-600 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity bg-slate-900/80 rounded-full"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" /></svg></button>
+
+                {/* Games Grid */}
+                <div className="p-6 flex-1 overflow-y-auto no-scrollbar z-10 space-y-4">
+                    {games.length === 0 && (
+                        <div className="flex flex-col items-center justify-center h-64 text-slate-500 gap-4">
+                            <div className="w-20 h-20 rounded-full bg-white/5 flex items-center justify-center text-4xl border border-white/5 animate-pulse">🌌</div>
+                            <p className="text-xs tracking-widest uppercase">No Active Adventures</p>
                         </div>
-                    ))}
+                    )}
+                    {games.map(g => {
+                        const themeStyle = GAME_THEMES[g.theme] || GAME_THEMES.fantasy;
+                        return (
+                            <div 
+                                key={g.id} 
+                                onClick={() => { setActiveGame(g); setView('play'); }} 
+                                className={`relative overflow-hidden rounded-2xl p-5 cursor-pointer group active:scale-[0.98] transition-all border border-white/5 hover:border-white/20 shadow-lg`}
+                            >
+                                {/* Card Background */}
+                                <div className={`absolute inset-0 bg-gradient-to-br ${themeStyle.gradient} opacity-80 group-hover:opacity-100 transition-opacity`}></div>
+                                <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-10"></div>
+                                
+                                <div className="relative z-10 flex flex-col gap-2">
+                                    <div className="flex justify-between items-start">
+                                        <h3 className={`font-bold text-lg text-white leading-tight drop-shadow-md font-serif`}>{g.title}</h3>
+                                        <span className={`text-[10px] px-2 py-0.5 rounded border border-white/20 text-white/80 uppercase font-mono tracking-wider bg-black/20`}>{g.theme}</span>
+                                    </div>
+                                    
+                                    <p className="text-xs text-white/60 line-clamp-2 leading-relaxed italic font-serif border-l-2 border-white/20 pl-2">
+                                        "{g.worldSetting}"
+                                    </p>
+                                    
+                                    <div className="flex justify-between items-end mt-2 pt-2 border-t border-white/10">
+                                        <div className="flex -space-x-2">
+                                            {characters.filter(c => g.playerCharIds.includes(c.id)).map(c => (
+                                                <img key={c.id} src={c.avatar} className="w-8 h-8 rounded-full border-2 border-black/50 object-cover shadow-sm" />
+                                            ))}
+                                        </div>
+                                        <div className="text-[10px] text-white/40 font-mono">
+                                            {new Date(g.lastPlayedAt).toLocaleDateString()}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Delete Button */}
+                                <button onClick={(e) => handleDeleteGame(e, g.id)} className="absolute top-2 right-2 p-2 text-white/20 hover:text-red-400 z-20 opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4"><path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z" /></svg>
+                                </button>
+                            </div>
+                        );
+                    })}
                 </div>
             </div>
         );
     }
 
+    // 2. Create View
     if (view === 'create') {
         return (
             <div className="h-full w-full bg-slate-50 flex flex-col font-sans">
@@ -621,7 +731,7 @@ Output: A first-person memory summary in Chinese.`;
         );
     }
 
-    // PLAY VIEW
+    // 3. Play View
     if (!activeGame) return null;
     const theme = GAME_THEMES[activeGame.theme];
     const activePlayers = characters.filter(c => activeGame.playerCharIds.includes(c.id));
@@ -635,7 +745,7 @@ Output: A first-person memory summary in Chinese.`;
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" /></svg>
                 </button>
                 <div className="flex flex-col items-center">
-                    <span className="font-bold text-sm tracking-wide">{activeGame.title}</span>
+                    <span className="font-bold text-sm tracking-wide">跑团: {activeGame.title}</span>
                     <span className="text-[9px] opacity-60 flex items-center gap-1">
                         <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
                         {activeGame.status.location}
@@ -646,7 +756,25 @@ Output: A first-person memory summary in Chinese.`;
                 </button>
             </div>
 
-            {/* Stats HUD (Updated) */}
+            {/* --- NEW: Party HUD (Persistent Avatars) --- */}
+            <div className={`flex gap-4 p-3 overflow-x-auto no-scrollbar border-b ${theme.border} bg-black/20 backdrop-blur-sm z-10 shrink-0`}>
+                {/* User Avatar */}
+                <div className="relative group shrink-0">
+                    <img src={userProfile.avatar} className="w-10 h-10 rounded-full border-2 border-white/20 object-cover shadow-sm" />
+                    <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 bg-black/60 text-white text-[8px] px-1.5 rounded-full backdrop-blur-sm whitespace-nowrap">YOU</div>
+                </div>
+                {/* Teammates */}
+                {activePlayers.map(p => (
+                    <div key={p.id} className="relative group shrink-0 cursor-pointer active:scale-95 transition-transform">
+                        <img src={p.avatar} className="w-10 h-10 rounded-full border-2 border-white/20 object-cover shadow-sm group-hover:border-white/50 transition-colors" />
+                        <div className="absolute inset-0 rounded-full ring-2 ring-transparent group-hover:ring-green-400/50 transition-all"></div>
+                        {/* Simple Status Indicator (Green Dot) */}
+                        <div className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-500 rounded-full border-2 border-black/50 shadow-sm animate-pulse"></div>
+                    </div>
+                ))}
+            </div>
+
+            {/* Stats HUD */}
             <div className={`px-4 py-2 border-b ${theme.border} bg-black/10 backdrop-blur-sm z-10 grid grid-cols-3 gap-2 shrink-0`}>
                 <div className="flex flex-col items-center bg-red-500/20 rounded p-1 border border-red-500/30">
                     <span className="text-[8px] text-red-300 font-bold uppercase">HP (生命)</span>
@@ -681,9 +809,9 @@ Output: A first-person memory summary in Chinese.`;
                     if (isGM) {
                         return (
                             <div key={log.id || i} className="animate-fade-in my-4">
-                                <div className={`p-5 rounded-lg border-2 ${theme.border} ${theme.cardBg} leading-relaxed text-sm shadow-sm relative mx-auto w-full`}>
+                                <div className={`p-5 rounded-lg border-2 ${theme.border} ${theme.cardBg} shadow-sm relative mx-auto w-full text-sm`}>
                                     <div className="absolute -top-3 left-4 bg-inherit px-2 text-[10px] font-bold uppercase tracking-widest opacity-80 border border-inherit rounded">Game Master</div>
-                                    <div className="whitespace-pre-wrap font-medium">{log.content}</div>
+                                    <GameMarkdown content={log.content} theme={theme} />
                                 </div>
                             </div>
                         );
@@ -694,15 +822,10 @@ Output: A first-person memory summary in Chinese.`;
                         return (
                             <div key={log.id || i} className="flex gap-3 animate-slide-up">
                                 <img src={charInfo.avatar} className={`w-10 h-10 rounded-full object-cover border ${theme.border} shrink-0 mt-1`} />
-                                <div className="flex flex-col max-w-[80%]">
+                                <div className="flex flex-col max-w-[85%]">
                                     <span className="text-[10px] font-bold opacity-60 mb-1 ml-1">{charInfo.name}</span>
                                     <div className={`px-4 py-2 rounded-2xl rounded-tl-none text-sm ${theme.cardBg} border ${theme.border} shadow-sm`}>
-                                        {/* Render Markdown-like bolding for Actions */}
-                                        {log.content.split(/(\*.*?\*)/).map((part, idx) => 
-                                            part.startsWith('*') && part.endsWith('*') 
-                                            ? <span key={idx} className="italic opacity-70 block mb-1 text-xs">{part.slice(1, -1)}</span> 
-                                            : <span key={idx}>{part}</span>
-                                        )}
+                                        <GameMarkdown content={log.content} theme={theme} />
                                     </div>
                                 </div>
                             </div>
@@ -811,7 +934,7 @@ Output: A first-person memory summary in Chinese.`;
             {isArchiving && (
                 <div className="absolute inset-0 bg-black/80 z-50 flex items-center justify-center text-white flex-col gap-4 animate-fade-in">
                     <div className="w-8 h-8 border-4 border-orange-500 border-t-transparent rounded-full animate-spin"></div>
-                    <span className="text-xs tracking-widest font-mono">SAVING MEMORIES...</span>
+                    <span className="text-xs tracking-widest font-mono">正在传递记忆...</span>
                 </div>
             )}
         </div>
