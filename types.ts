@@ -21,7 +21,8 @@ export enum AppID {
   FAQ = 'faq',
   Game = 'game',
   Worldbook = 'worldbook', 
-  Novel = 'novel', // New App
+  Novel = 'novel', 
+  Bank = 'bank', // New App
 }
 
 export interface SystemLog {
@@ -215,7 +216,7 @@ export interface Worldbook {
     updatedAt: number;
 }
 
-// --- NOVEL / CO-WRITING TYPES (NEW) ---
+// --- NOVEL / CO-WRITING TYPES ---
 export interface NovelProtagonist {
     id: string;
     name: string;
@@ -225,20 +226,13 @@ export interface NovelProtagonist {
 
 export interface NovelSegment {
     id: string;
-    // 'role' determines the function. 'type' is kept for legacy compatibility.
-    // writer -> type: story
-    // commenter -> type: discussion
-    // analyst -> type: analysis
     role?: 'writer' | 'commenter' | 'analyst'; 
     type: 'discussion' | 'story' | 'analysis'; 
-    
-    authorId: string; // 'user' or charId
+    authorId: string; 
     content: string;
     timestamp: number;
-    
-    // New Fields for Structured Output
-    focus?: string; // e.g. "伏笔", "情绪", "文风"
-    targetSegId?: string; // ID of the story segment being commented on
+    focus?: string; 
+    targetSegId?: string;
     meta?: {
         tone?: string;
         suggestion?: string;
@@ -251,20 +245,19 @@ export interface NovelSegment {
 export interface NovelBook {
     id: string;
     title: string;
-    subtitle?: string; // New: Volume name or subtitle (e.g. "第一卷：风起云涌")
+    subtitle?: string; 
     summary: string;
-    coverStyle: string; // CSS gradient or image
-    coverImage?: string; // NEW: Custom cover image URL/Base64
+    coverStyle: string; 
+    coverImage?: string; 
     worldSetting: string;
-    collaboratorIds: string[]; // CharIds
+    collaboratorIds: string[]; 
     protagonists: NovelProtagonist[];
     segments: NovelSegment[];
     createdAt: number;
     lastActiveAt: number;
 }
-// -------------------------------------
 
-// --- DATE APP TYPES (NEW) ---
+// --- DATE APP TYPES ---
 export interface DialogueItem {
     text: string;
     emotion?: string;
@@ -278,9 +271,90 @@ export interface DateState {
     currentSprite: string;
     isNovelMode: boolean;
     timestamp: number;
-    peekStatus: string; // Persist the initial peek text
+    peekStatus: string; 
 }
-// ---------------------------
+
+// --- BANK / SHOP GAME TYPES (NEW) ---
+export interface BankTransaction {
+    id: string;
+    amount: number;
+    category: string; 
+    note: string;
+    timestamp: number;
+    dateStr: string; // YYYY-MM-DD
+}
+
+export interface SavingsGoal {
+    id: string;
+    name: string;
+    targetAmount: number;
+    currentAmount: number; 
+    icon: string;
+    isCompleted: boolean;
+}
+
+export interface ShopStaff {
+    id: string;
+    name: string;
+    avatar: string; // Emoji or URL
+    role: 'manager' | 'waiter' | 'chef';
+    fatigue: number; // 0-100, >80 stops working
+    maxFatigue: number;
+    hireDate: number;
+    personality?: string; // New: Custom personality
+    x?: number; // New: Position X (0-100)
+    y?: number; // New: Position Y (0-100)
+}
+
+export interface ShopRecipe {
+    id: string;
+    name: string;
+    icon: string;
+    cost: number; // AP cost to unlock
+    appeal: number; // Contribution to shop appeal
+    isUnlocked: boolean;
+}
+
+export interface BankConfig {
+    dailyBudget: number;
+    currencySymbol: string;
+}
+
+export interface BankGuestbookItem {
+    id: string;
+    authorName: string;
+    avatar?: string;
+    content: string;
+    isChar: boolean;
+    charId?: string;
+    timestamp: number;
+}
+
+export interface BankShopState {
+    actionPoints: number;
+    shopName: string;
+    shopLevel: number;
+    appeal: number; // Total Appeal
+    background: string; // Custom BG
+    staff: ShopStaff[];
+    unlockedRecipes: string[]; // IDs
+    activeVisitor?: {
+        charId: string;
+        message: string;
+        timestamp: number;
+        giftAp?: number; // Optional gift from visitor
+    };
+    guestbook?: BankGuestbookItem[]; // New: Guestbook messages
+}
+
+export interface BankFullState {
+    config: BankConfig;
+    shop: BankShopState;
+    goals: SavingsGoal[];
+    todaySpent: number; 
+    lastLoginDate: string;
+}
+// ---------------------------------
 
 export interface CharacterProfile {
   id: string;
@@ -293,7 +367,6 @@ export interface CharacterProfile {
   refinedMemories?: Record<string, string>;
   activeMemoryMonths?: string[];
   
-  // New: Writer Persona Cache
   writerPersona?: string;
   writerPersonaGeneratedAt?: number;
 
@@ -311,7 +384,6 @@ export interface CharacterProfile {
   sprites?: Record<string, string>;
   spriteConfig?: SpriteConfig;
   
-  // Saved state for DateApp persistence
   savedDateState?: DateState;
 
   socialProfile?: {
@@ -478,7 +550,6 @@ export interface StudyCourse {
     preference?: string; 
 }
 
-// --- GAME / TRPG TYPES ---
 export type GameTheme = 'fantasy' | 'cyber' | 'horror' | 'modern';
 
 export interface GameActionOption {
@@ -489,13 +560,13 @@ export interface GameActionOption {
 export interface GameLog {
     id: string;
     role: 'gm' | 'player' | 'character' | 'system';
-    speakerName?: string; // If character or player
+    speakerName?: string; 
     content: string;
     timestamp: number;
     diceRoll?: {
         result: number;
         max: number;
-        check?: string; // e.g. "STR Check"
+        check?: string; 
         success?: boolean;
     };
 }
@@ -504,21 +575,20 @@ export interface GameSession {
     id: string;
     title: string;
     theme: GameTheme;
-    worldSetting: string; // The "Lore"
-    playerCharIds: string[]; // IDs of characters playing with user
+    worldSetting: string; 
+    playerCharIds: string[]; 
     logs: GameLog[];
     status: {
         location: string;
-        health: number; // HP
-        sanity: number; // MP / Sanity
-        gold: number;   // Currency
+        health: number; 
+        sanity: number; 
+        gold: number;   
         inventory: string[];
     };
-    suggestedActions?: GameActionOption[]; // Options for next turn
+    suggestedActions?: GameActionOption[]; 
     createdAt: number;
     lastPlayedAt: number;
 }
-// ------------------------
 
 export type MessageType = 'text' | 'image' | 'emoji' | 'interaction' | 'transfer' | 'system' | 'social_card';
 
@@ -538,17 +608,16 @@ export interface Message {
     };
 }
 
-// Emoji types
 export interface EmojiCategory {
     id: string;
     name: string;
-    isSystem?: boolean; // Can't delete if true
+    isSystem?: boolean; 
 }
 
 export interface Emoji {
     name: string;
     url: string;
-    categoryId?: string; // Linked to EmojiCategory.id
+    categoryId?: string; 
 }
 
 export interface FullBackupData {
@@ -563,8 +632,8 @@ export interface FullBackupData {
     groups?: GroupProfile[]; 
     messages?: Message[];
     customThemes?: ChatTheme[];
-    savedEmojis?: Emoji[]; // Updated Type
-    emojiCategories?: EmojiCategory[]; // New Backup Field
+    savedEmojis?: Emoji[]; 
+    emojiCategories?: EmojiCategory[]; 
     savedJournalStickers?: {name: string, url: string}[]; 
     assets?: { id: string, data: string }[];
     galleryImages?: GalleryImage[];
@@ -580,7 +649,11 @@ export interface FullBackupData {
     worldbooks?: Worldbook[]; 
     roomCustomAssets?: {name: string, image: string, defaultScale: number, description?: string}[]; 
     
-    novels?: NovelBook[]; // NEW
+    novels?: NovelBook[]; 
+    
+    // Bank Data
+    bankState?: BankFullState;
+    bankTransactions?: BankTransaction[];
 
     socialAppData?: {
         charHandles?: Record<string, SubAccount[]>;
@@ -591,7 +664,7 @@ export interface FullBackupData {
     
     mediaAssets?: {
         charId: string;
-        avatar?: string; // ADDED
+        avatar?: string; 
         sprites?: Record<string, string>;
         roomItems?: Record<string, string>; 
         backgrounds?: { chat?: string; date?: string; roomWall?: string; roomFloor?: string };

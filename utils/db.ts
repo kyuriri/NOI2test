@@ -1,17 +1,20 @@
 
+
+
 import { 
     CharacterProfile, ChatTheme, Message, UserProfile, 
     Task, Anniversary, DiaryEntry, RoomTodo, RoomNote, 
-    GalleryImage, FullBackupData, GroupProfile, SocialPost, StudyCourse, GameSession, Worldbook, NovelBook, Emoji, EmojiCategory
+    GalleryImage, FullBackupData, GroupProfile, SocialPost, StudyCourse, GameSession, Worldbook, NovelBook, Emoji, EmojiCategory,
+    BankTransaction, SavingsGoal, BankFullState
 } from '../types';
 
 const DB_NAME = 'AetherOS_Data';
-const DB_VERSION = 32; // Bumped Version for Emoji Categories
+const DB_VERSION = 33; // Bumped for Bank
 
 const STORE_CHARACTERS = 'characters';
 const STORE_MESSAGES = 'messages';
 const STORE_EMOJIS = 'emojis';
-const STORE_EMOJI_CATEGORIES = 'emoji_categories'; // NEW
+const STORE_EMOJI_CATEGORIES = 'emoji_categories'; 
 const STORE_THEMES = 'themes';
 const STORE_ASSETS = 'assets'; 
 const STORE_SCHEDULED = 'scheduled_messages'; 
@@ -29,6 +32,8 @@ const STORE_COURSES = 'courses';
 const STORE_GAMES = 'games';
 const STORE_WORLDBOOKS = 'worldbooks'; 
 const STORE_NOVELS = 'novels'; 
+const STORE_BANK_TX = 'bank_transactions'; // New
+const STORE_BANK_DATA = 'bank_data'; // New (Single object for state)
 
 export interface ScheduledMessage {
     id: string;
@@ -87,7 +92,7 @@ const openDB = (): Promise<IDBDatabase> => {
       }
       
       createStore(STORE_EMOJIS, { keyPath: 'name' });
-      createStore(STORE_EMOJI_CATEGORIES, { keyPath: 'id' }); // NEW
+      createStore(STORE_EMOJI_CATEGORIES, { keyPath: 'id' });
 
       createStore(STORE_THEMES, { keyPath: 'id' });
       createStore(STORE_ASSETS, { keyPath: 'id' });
@@ -127,6 +132,9 @@ const openDB = (): Promise<IDBDatabase> => {
       createStore(STORE_GAMES, { keyPath: 'id' }); 
       createStore(STORE_WORLDBOOKS, { keyPath: 'id' }); 
       createStore(STORE_NOVELS, { keyPath: 'id' });
+      
+      createStore(STORE_BANK_TX, { keyPath: 'id' }); // New
+      createStore(STORE_BANK_DATA, { keyPath: 'id' }); // New
     };
   });
 };
@@ -311,8 +319,6 @@ export const DB = {
       transaction.objectStore(STORE_SOCIAL_POSTS).clear();
   },
 
-  // --- EMOJI & CATEGORY SECTION ---
-
   getEmojis: async (): Promise<Emoji[]> => {
     const db = await openDB();
     return new Promise((resolve, reject) => {
@@ -336,7 +342,6 @@ export const DB = {
     transaction.objectStore(STORE_EMOJIS).delete(name);
   },
 
-  // Category Logic
   getEmojiCategories: async (): Promise<EmojiCategory[]> => {
       const db = await openDB();
       return new Promise((resolve, reject) => {
@@ -361,11 +366,7 @@ export const DB = {
   deleteEmojiCategory: async (id: string): Promise<void> => {
       const db = await openDB();
       const tx = db.transaction([STORE_EMOJI_CATEGORIES, STORE_EMOJIS], 'readwrite');
-      
-      // 1. Delete Category
       tx.objectStore(STORE_EMOJI_CATEGORIES).delete(id);
-      
-      // 2. Delete Emojis in Category
       const emojiStore = tx.objectStore(STORE_EMOJIS);
       const request = emojiStore.getAll();
       request.onsuccess = () => {
@@ -376,37 +377,26 @@ export const DB = {
               }
           });
       };
-      
       return new Promise((resolve, reject) => {
           tx.oncomplete = () => resolve();
           tx.onerror = () => reject(tx.error);
       });
   },
 
-  // Helper to initialize default/sully emojis
   initializeEmojiData: async (): Promise<void> => {
       const cats = await DB.getEmojiCategories();
-      
-      // 1. Ensure Default Category
       if (!cats.some(c => c.id === 'default')) {
           await DB.saveEmojiCategory({ id: 'default', name: '默认', isSystem: true });
       }
-
-      // 2. Ensure Sully Category
       if (!cats.some(c => c.id === SULLY_CATEGORY_ID)) {
           await DB.saveEmojiCategory({ id: SULLY_CATEGORY_ID, name: 'Sully 专属', isSystem: true });
-          
-          // Seed Sully Emojis
           const db = await openDB();
           const tx = db.transaction(STORE_EMOJIS, 'readwrite');
           const store = tx.objectStore(STORE_EMOJIS);
           SULLY_PRESET_EMOJIS.forEach(emoji => store.put(emoji));
-          
           await new Promise(resolve => { tx.oncomplete = resolve; });
       }
   },
-
-  // --- THEMES & ASSETS ---
 
   getThemes: async (): Promise<ChatTheme[]> => {
     const db = await openDB();
@@ -442,7 +432,6 @@ export const DB = {
     });
   },
 
-  // NEW: Get Single Asset
   getAsset: async (id: string): Promise<string | null> => {
       const db = await openDB();
       return new Promise((resolve, reject) => {
@@ -775,7 +764,6 @@ export const DB = {
       transaction.objectStore(STORE_WORLDBOOKS).delete(id);
   },
 
-  // --- NOVELS (NEW) ---
   getAllNovels: async (): Promise<NovelBook[]> => {
       const db = await openDB();
       if (!db.objectStoreNames.contains(STORE_NOVELS)) return [];
@@ -800,7 +788,49 @@ export const DB = {
       transaction.objectStore(STORE_NOVELS).delete(id);
   },
 
-  // --- Helper for Sequential Export ---
+  // --- BANK / PET APP LOGIC ---
+  getBankState: async (): Promise<BankFullState | null> => {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+          if (!db.objectStoreNames.contains(STORE_BANK_DATA)) { resolve(null); return; }
+          const transaction = db.transaction(STORE_BANK_DATA, 'readonly');
+          const store = transaction.objectStore(STORE_BANK_DATA);
+          const req = store.get('main_state');
+          req.onsuccess = () => resolve(req.result || null);
+          req.onerror = () => reject(req.error);
+      });
+  },
+
+  saveBankState: async (state: BankFullState): Promise<void> => {
+      const db = await openDB();
+      const transaction = db.transaction(STORE_BANK_DATA, 'readwrite');
+      transaction.objectStore(STORE_BANK_DATA).put({ ...state, id: 'main_state' });
+  },
+
+  getAllTransactions: async (): Promise<BankTransaction[]> => {
+      const db = await openDB();
+      if (!db.objectStoreNames.contains(STORE_BANK_TX)) return [];
+      return new Promise((resolve, reject) => {
+          const transaction = db.transaction(STORE_BANK_TX, 'readonly');
+          const store = transaction.objectStore(STORE_BANK_TX);
+          const request = store.getAll();
+          request.onsuccess = () => resolve(request.result || []);
+          request.onerror = () => reject(request.error);
+      });
+  },
+
+  saveTransaction: async (txData: BankTransaction): Promise<void> => {
+      const db = await openDB();
+      const transaction = db.transaction(STORE_BANK_TX, 'readwrite');
+      transaction.objectStore(STORE_BANK_TX).put(txData);
+  },
+
+  deleteTransaction: async (id: string): Promise<void> => {
+      const db = await openDB();
+      const transaction = db.transaction(STORE_BANK_TX, 'readwrite');
+      transaction.objectStore(STORE_BANK_TX).delete(id);
+  },
+
   getRawStoreData: async (storeName: string): Promise<any[]> => {
       const db = await openDB();
       if (!db.objectStoreNames.contains(storeName)) return [];
@@ -813,8 +843,6 @@ export const DB = {
       });
   },
 
-  // --- Bulk Export/Import ---
-  
   exportFullData: async (): Promise<Partial<FullBackupData>> => {
       const db = await openDB();
       
@@ -831,12 +859,12 @@ export const DB = {
           });
       };
 
-      const [characters, messages, themes, emojis, emojiCategories, assets, galleryImages, userProfiles, diaries, tasks, anniversaries, roomTodos, roomNotes, groups, journalStickers, socialPosts, courses, games, worldbooks, novels] = await Promise.all([
+      const [characters, messages, themes, emojis, emojiCategories, assets, galleryImages, userProfiles, diaries, tasks, anniversaries, roomTodos, roomNotes, groups, journalStickers, socialPosts, courses, games, worldbooks, novels, bankTx, bankData] = await Promise.all([
           getAllFromStore(STORE_CHARACTERS),
           getAllFromStore(STORE_MESSAGES),
           getAllFromStore(STORE_THEMES),
           getAllFromStore(STORE_EMOJIS),
-          getAllFromStore(STORE_EMOJI_CATEGORIES), // NEW
+          getAllFromStore(STORE_EMOJI_CATEGORIES), 
           getAllFromStore(STORE_ASSETS),
           getAllFromStore(STORE_GALLERY),
           getAllFromStore(STORE_USER),
@@ -851,7 +879,9 @@ export const DB = {
           getAllFromStore(STORE_COURSES),
           getAllFromStore(STORE_GAMES),
           getAllFromStore(STORE_WORLDBOOKS),
-          getAllFromStore(STORE_NOVELS), 
+          getAllFromStore(STORE_NOVELS),
+          getAllFromStore(STORE_BANK_TX),
+          getAllFromStore(STORE_BANK_DATA),
       ]);
 
       const userProfile = userProfiles.length > 0 ? {
@@ -860,8 +890,12 @@ export const DB = {
           bio: userProfiles[0].bio
       } : undefined;
 
+      const bankState = bankData.length > 0 ? bankData[0] : undefined;
+
       return {
-          characters, messages, customThemes: themes, savedEmojis: emojis, emojiCategories, assets, galleryImages, userProfile, diaries, tasks, anniversaries, roomTodos, roomNotes, groups, savedJournalStickers: journalStickers, socialPosts, courses, games, worldbooks, novels
+          characters, messages, customThemes: themes, savedEmojis: emojis, emojiCategories, assets, galleryImages, userProfile, diaries, tasks, anniversaries, roomTodos, roomNotes, groups, savedJournalStickers: journalStickers, socialPosts, courses, games, worldbooks, novels,
+          bankState: bankState ? { ...bankState, id: undefined } : undefined, // Clean ID
+          bankTransactions: bankTx
       };
   },
 
@@ -872,22 +906,21 @@ export const DB = {
           STORE_CHARACTERS, STORE_MESSAGES, STORE_THEMES, STORE_EMOJIS, STORE_EMOJI_CATEGORIES,
           STORE_ASSETS, STORE_GALLERY, STORE_USER, STORE_DIARIES, 
           STORE_TASKS, STORE_ANNIVERSARIES, STORE_ROOM_TODOS, STORE_ROOM_NOTES,
-          STORE_GROUPS, STORE_JOURNAL_STICKERS, STORE_SOCIAL_POSTS, STORE_COURSES, STORE_GAMES, STORE_WORLDBOOKS, STORE_NOVELS
+          STORE_GROUPS, STORE_JOURNAL_STICKERS, STORE_SOCIAL_POSTS, STORE_COURSES, STORE_GAMES, STORE_WORLDBOOKS, STORE_NOVELS,
+          STORE_BANK_TX, STORE_BANK_DATA
       ].filter(name => db.objectStoreNames.contains(name));
 
       const tx = db.transaction(availableStores, 'readwrite');
 
-      // MODIFIED: Only clear if items exist in backup
       const clearAndAdd = (storeName: string, items: any[]) => {
           if (!availableStores.includes(storeName)) return;
-          if (!items || items.length === 0) return; // SKIP if no data in backup (Preserve existing)
+          if (!items || items.length === 0) return; 
           
           const store = tx.objectStore(storeName);
           store.clear();
           items.forEach(item => store.put(item));
       };
 
-      // NEW: Merge Store (Additive Restore)
       const mergeStore = (storeName: string, items: any[]) => {
           if (!availableStores.includes(storeName)) return;
           if (!items || items.length === 0) return;
@@ -903,7 +936,7 @@ export const DB = {
                   if (media) {
                       return {
                           ...c,
-                          avatar: media.avatar || c.avatar, // Updated to merge avatar
+                          avatar: media.avatar || c.avatar, 
                           sprites: media.sprites || c.sprites,
                           chatBackground: media.backgrounds?.chat || c.chatBackground,
                           dateBackground: media.backgrounds?.date || c.dateBackground,
@@ -933,7 +966,7 @@ export const DB = {
                       if (media) {
                           return {
                               ...c,
-                              avatar: media.avatar || c.avatar, // Updated to merge avatar
+                              avatar: media.avatar || c.avatar, 
                               sprites: media.sprites || c.sprites, 
                               chatBackground: media.backgrounds?.chat || c.chatBackground,
                               dateBackground: media.backgrounds?.date || c.dateBackground,
@@ -956,33 +989,22 @@ export const DB = {
       }
 
       if (data.messages) {
-           // SPECIAL Handling for Messages: Clear and Add only if messages exist
            if (availableStores.includes(STORE_MESSAGES) && data.messages.length > 0) {
                const store = tx.objectStore(STORE_MESSAGES);
-               
-               // Fix: If it's a "Media Only" patch (indicated by missing characters array but present mediaAssets), 
-               // we should MERGE (put) instead of CLEAR to preserve text messages from a previous "Text Only" import.
-               // Otherwise, for full backups/text backups, we clear to ensure clean state.
-               // "characters" key is present in full/text backup, but missing in media-only backup.
                const isPatchMode = !data.characters;
-
                if (!isPatchMode) {
                    store.clear();
                }
-               
-               // Use put() to support both adding and updating (for merging media back into text placeholders)
                data.messages.forEach(m => store.put(m)); 
            }
       }
       
-      // MODIFIED: Use mergeStore for resources/assets/themes to allow additive imports
       if (data.customThemes) mergeStore(STORE_THEMES, data.customThemes);
       if (data.savedEmojis) mergeStore(STORE_EMOJIS, data.savedEmojis);
-      if (data.emojiCategories) mergeStore(STORE_EMOJI_CATEGORIES, data.emojiCategories); // NEW
+      if (data.emojiCategories) mergeStore(STORE_EMOJI_CATEGORIES, data.emojiCategories); 
       if (data.assets) mergeStore(STORE_ASSETS, data.assets);
       if (data.savedJournalStickers) mergeStore(STORE_JOURNAL_STICKERS, data.savedJournalStickers);
 
-      // Keep Clear & Add for stateful data
       if (data.galleryImages) clearAndAdd(STORE_GALLERY, data.galleryImages);
       if (data.diaries) clearAndAdd(STORE_DIARIES, data.diaries);
       if (data.tasks) clearAndAdd(STORE_TASKS, data.tasks);
@@ -995,12 +1017,21 @@ export const DB = {
       if (data.games) clearAndAdd(STORE_GAMES, data.games);
       if (data.worldbooks) clearAndAdd(STORE_WORLDBOOKS, data.worldbooks);
       if (data.novels) clearAndAdd(STORE_NOVELS, data.novels);
+      if (data.bankTransactions) clearAndAdd(STORE_BANK_TX, data.bankTransactions);
       
       if (data.userProfile) {
           if (availableStores.includes(STORE_USER)) {
               const store = tx.objectStore(STORE_USER);
               store.clear();
               store.put({ ...data.userProfile, id: 'me' });
+          }
+      }
+
+      if (data.bankState) {
+          if (availableStores.includes(STORE_BANK_DATA)) {
+              const store = tx.objectStore(STORE_BANK_DATA);
+              store.clear();
+              store.put({ ...data.bankState, id: 'main_state' });
           }
       }
 
