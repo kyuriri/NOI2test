@@ -1,10 +1,8 @@
 
-
-
 import React, { useState, useEffect, useRef, useLayoutEffect, useMemo } from 'react';
 import { useOS } from '../context/OSContext';
 import { DB } from '../utils/db';
-import { Message, GroupProfile, CharacterProfile, MessageType, ChatTheme, MemoryFragment } from '../types';
+import { Message, GroupProfile, CharacterProfile, MessageType, ChatTheme, MemoryFragment, EmojiCategory } from '../types';
 import Modal from '../components/os/Modal';
 import { ContextBuilder } from '../utils/context';
 import { processImage } from '../utils/file';
@@ -41,11 +39,18 @@ const GroupMessageItem = React.memo(({
     const avatar = isUser ? userAvatar : char?.avatar;
     const name = isUser ? '我' : char?.name || '未知成员';
     const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const startPos = useRef({ x: 0, y: 0 });
     
     // Time formatting
     const timeStr = new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-    const handleTouchStart = () => {
+    const handleTouchStart = (e: React.TouchEvent | React.MouseEvent) => {
+        if ('touches' in e) {
+            startPos.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        } else {
+            startPos.current = { x: e.clientX, y: e.clientY };
+        }
+
         longPressTimer.current = setTimeout(() => {
             if (!selectionMode) onLongPress(msg.id);
         }, 500);
@@ -53,6 +58,27 @@ const GroupMessageItem = React.memo(({
 
     const handleTouchEnd = () => {
         if (longPressTimer.current) {
+            clearTimeout(longPressTimer.current);
+            longPressTimer.current = null;
+        }
+    };
+
+    const handleMove = (e: React.TouchEvent | React.MouseEvent) => {
+        if (!longPressTimer.current) return;
+
+        let clientX, clientY;
+        if ('touches' in e) {
+            clientX = e.touches[0].clientX;
+            clientY = e.touches[0].clientY;
+        } else {
+            clientX = e.clientX;
+            clientY = e.clientY;
+        }
+
+        const diffX = Math.abs(clientX - startPos.current.x);
+        const diffY = Math.abs(clientY - startPos.current.y);
+
+        if (diffX > 10 || diffY > 10) {
             clearTimeout(longPressTimer.current);
             longPressTimer.current = null;
         }
@@ -92,7 +118,7 @@ const GroupMessageItem = React.memo(({
                 );
             default:
                 return (
-                    <div className={`px-3.5 py-2 rounded-[18px] text-[15px] leading-relaxed shadow-sm break-words max-w-[280px] ${isUser ? 'bg-violet-500 text-white rounded-tr-sm' : 'bg-white text-slate-700 rounded-tl-sm border border-slate-100'}`}>
+                    <div className={`px-3.5 py-2 rounded-[18px] text-[15px] leading-relaxed shadow-sm whitespace-pre-wrap break-all ${isUser ? 'bg-violet-500 text-white rounded-tr-sm' : 'bg-white text-slate-700 rounded-tl-sm border border-slate-100'}`}>
                         {msg.content}
                     </div>
                 );
@@ -104,8 +130,10 @@ const GroupMessageItem = React.memo(({
             className={`flex gap-3 mb-4 w-full animate-fade-in relative ${isUser ? 'justify-end' : 'justify-start'} ${selectionMode ? 'pl-8' : ''}`}
             onTouchStart={handleTouchStart}
             onTouchEnd={handleTouchEnd}
+            onTouchMove={handleMove}
             onMouseDown={handleTouchStart}
             onMouseUp={handleTouchEnd}
+            onMouseMove={handleMove}
             onClick={handleClick}
         >
             {selectionMode && (
@@ -160,7 +188,8 @@ const GroupChat: React.FC = () => {
     const [selectedMsgIds, setSelectedMsgIds] = useState<Set<number>>(new Set());
 
     // Data State
-    const [emojis, setEmojis] = useState<{name: string, url: string}[]>([]);
+    const [emojis, setEmojis] = useState<{name: string, url: string, categoryId?: string}[]>([]);
+    const [categories, setCategories] = useState<EmojiCategory[]>([]); // New
     
     // Create/Edit Group State
     const [tempGroupName, setTempGroupName] = useState('');
@@ -178,7 +207,11 @@ const GroupChat: React.FC = () => {
             DB.getGroupMessages(activeGroup.id).then(msgs => {
                 setMessages(msgs.sort((a, b) => a.timestamp - b.timestamp));
             });
-            DB.getEmojis().then(setEmojis);
+            // Fetch emojis AND categories
+            Promise.all([DB.getEmojis(), DB.getEmojiCategories()]).then(([es, cats]) => {
+                setEmojis(es);
+                setCategories(cats);
+            });
         }
     }, [activeGroup]);
 
@@ -566,7 +599,25 @@ ${recentPrivate || '(暂无私聊)'}
                 return `${name}: ${content}`;
             }).join('\n');
 
-            const emojiNames = emojis.map(e => e.name).join(', ');
+            // NEW: Build Categorized Emoji Context
+            const emojiContextStr = (() => {
+                if (emojis.length === 0) return '无';
+                
+                const grouped: Record<string, string[]> = {};
+                const catMap: Record<string, string> = { 'default': '通用' };
+                categories.forEach(c => catMap[c.id] = c.name);
+                
+                emojis.forEach(e => {
+                    const cid = e.categoryId || 'default';
+                    if (!grouped[cid]) grouped[cid] = [];
+                    grouped[cid].push(e.name);
+                });
+                
+                return Object.entries(grouped).map(([cid, names]) => {
+                    const cName = catMap[cid] || '其他';
+                    return `${cName}: [${names.join(', ')}]`;
+                }).join('; ');
+            })();
 
             const prompt = `${context}
 
@@ -584,8 +635,7 @@ ${recentGroupMsgs}
 3. **表情包支持**:
    - 角色可以发送表情包。
    - 必须使用格式: \`[[SEND_EMOJI: 表情名称]]\`
-   - 可用表情: [${emojiNames}]
-   - 例如: \`[[SEND_EMOJI: happy]]\`
+   - **可用表情 (按分类)**: ${emojiContextStr}
 4. **气泡分段 (Bubble Splitting)**:
    - 就像真人聊天一样，如果一个角色要说长话，或者有停顿，请把内容分成多条消息。
    - 或者在一条内容中，使用句号 "。" 作为自然的分隔符（前端会自动拆分）。

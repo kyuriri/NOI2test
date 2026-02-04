@@ -19,7 +19,9 @@ export enum AppID {
   Social = 'social',
   Study = 'study',
   FAQ = 'faq',
-  Game = 'game', // New App
+  Game = 'game',
+  Worldbook = 'worldbook', 
+  Novel = 'novel', // New App
 }
 
 export interface SystemLog {
@@ -45,6 +47,8 @@ export interface OSTheme {
   wallpaper: string;
   darkMode: boolean;
   contentColor?: string;
+  launcherWidgetImage?: string; 
+  customFont?: string; 
 }
 
 export interface VirtualTime {
@@ -202,6 +206,82 @@ export interface PhoneEvidence {
     value?: string; 
 }
 
+export interface Worldbook {
+    id: string;
+    title: string;
+    content: string; 
+    category: string; 
+    createdAt: number;
+    updatedAt: number;
+}
+
+// --- NOVEL / CO-WRITING TYPES (NEW) ---
+export interface NovelProtagonist {
+    id: string;
+    name: string;
+    role: string; // e.g. "Protagonist", "Villain"
+    description: string;
+}
+
+export interface NovelSegment {
+    id: string;
+    // 'role' determines the function. 'type' is kept for legacy compatibility.
+    // writer -> type: story
+    // commenter -> type: discussion
+    // analyst -> type: analysis
+    role?: 'writer' | 'commenter' | 'analyst'; 
+    type: 'discussion' | 'story' | 'analysis'; 
+    
+    authorId: string; // 'user' or charId
+    content: string;
+    timestamp: number;
+    
+    // New Fields for Structured Output
+    focus?: string; // e.g. "伏笔", "情绪", "文风"
+    targetSegId?: string; // ID of the story segment being commented on
+    meta?: {
+        tone?: string;
+        suggestion?: string;
+        reaction?: string;
+        technique?: string;
+        mood?: string;
+    };
+}
+
+export interface NovelBook {
+    id: string;
+    title: string;
+    subtitle?: string; // New: Volume name or subtitle (e.g. "第一卷：风起云涌")
+    summary: string;
+    coverStyle: string; // CSS gradient or image
+    coverImage?: string; // NEW: Custom cover image URL/Base64
+    worldSetting: string;
+    collaboratorIds: string[]; // CharIds
+    protagonists: NovelProtagonist[];
+    segments: NovelSegment[];
+    createdAt: number;
+    lastActiveAt: number;
+}
+// -------------------------------------
+
+// --- DATE APP TYPES (NEW) ---
+export interface DialogueItem {
+    text: string;
+    emotion?: string;
+}
+
+export interface DateState {
+    dialogueQueue: DialogueItem[];
+    dialogueBatch: DialogueItem[];
+    currentText: string;
+    bgImage: string;
+    currentSprite: string;
+    isNovelMode: boolean;
+    timestamp: number;
+    peekStatus: string; // Persist the initial peek text
+}
+// ---------------------------
+
 export interface CharacterProfile {
   id: string;
   name: string;
@@ -213,6 +293,12 @@ export interface CharacterProfile {
   refinedMemories?: Record<string, string>;
   activeMemoryMonths?: string[];
   
+  // New: Writer Persona Cache
+  writerPersona?: string;
+  writerPersonaGeneratedAt?: number;
+
+  mountedWorldbooks?: { id: string; title: string; content: string; category?: string }[];
+
   impression?: UserImpression;
 
   bubbleStyle?: string;
@@ -225,6 +311,9 @@ export interface CharacterProfile {
   sprites?: Record<string, string>;
   spriteConfig?: SpriteConfig;
   
+  // Saved state for DateApp persistence
+  savedDateState?: DateState;
+
   socialProfile?: {
       handle: string; 
       bio?: string;   
@@ -449,6 +538,19 @@ export interface Message {
     };
 }
 
+// Emoji types
+export interface EmojiCategory {
+    id: string;
+    name: string;
+    isSystem?: boolean; // Can't delete if true
+}
+
+export interface Emoji {
+    name: string;
+    url: string;
+    categoryId?: string; // Linked to EmojiCategory.id
+}
+
 export interface FullBackupData {
     timestamp: number;
     version: number;
@@ -461,7 +563,8 @@ export interface FullBackupData {
     groups?: GroupProfile[]; 
     messages?: Message[];
     customThemes?: ChatTheme[];
-    savedEmojis?: {name: string, url: string}[];
+    savedEmojis?: Emoji[]; // Updated Type
+    emojiCategories?: EmojiCategory[]; // New Backup Field
     savedJournalStickers?: {name: string, url: string}[]; 
     assets?: { id: string, data: string }[];
     galleryImages?: GalleryImage[];
@@ -473,8 +576,12 @@ export interface FullBackupData {
     roomNotes?: RoomNote[];
     socialPosts?: SocialPost[]; 
     courses?: StudyCourse[]; 
-    games?: GameSession[]; // Added Games to Backup
+    games?: GameSession[];
+    worldbooks?: Worldbook[]; 
+    roomCustomAssets?: {name: string, image: string, defaultScale: number, description?: string}[]; 
     
+    novels?: NovelBook[]; // NEW
+
     socialAppData?: {
         charHandles?: Record<string, SubAccount[]>;
         userProfile?: SocialAppProfile;
@@ -484,6 +591,7 @@ export interface FullBackupData {
     
     mediaAssets?: {
         charId: string;
+        avatar?: string; // ADDED
         sprites?: Record<string, string>;
         roomItems?: Record<string, string>; 
         backgrounds?: { chat?: string; date?: string; roomWall?: string; roomFloor?: string };
