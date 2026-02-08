@@ -308,34 +308,6 @@ export interface DateState {
     peekStatus: string; 
 }
 
-// --- SHOP DECORATION / DOLLHOUSE TYPES ---
-export interface ShopRoomSticker {
-    id: string;
-    content: string; // emoji or image URL
-    x: number; // 0-100% within room
-    y: number; // 0-100% within room
-    scale: number;
-}
-
-export interface ShopRoom {
-    id: string;
-    name: string;
-    layer: number; // 1 = ground floor, 2 = upper floor
-    position: 'left' | 'right' | 'full';
-    unlocked: boolean;
-    wallpaper: string; // CSS background value
-    floor: string; // CSS background value
-    stickers: ShopRoomSticker[];
-}
-
-export interface ShopFloorPlanDef {
-    id: string;
-    name: string;
-    icon: string;
-    cost: number; // AP cost to unlock
-    roomDefs: { id: string; name: string; layer: number; position: 'left' | 'right' | 'full' }[];
-}
-
 // --- BANK / SHOP GAME TYPES (NEW) ---
 export interface BankTransaction {
     id: string;
@@ -395,6 +367,50 @@ export interface BankGuestbookItem {
     timestamp: number;
 }
 
+// --- DOLLHOUSE / ROOM DECORATION TYPES ---
+export interface DollhouseSticker {
+    id: string;
+    url: string;       // image URL or emoji
+    x: number;         // % position within the surface
+    y: number;
+    scale: number;
+    rotation: number;
+    zIndex: number;
+    surface: 'floor' | 'leftWall' | 'rightWall';
+}
+
+export interface DollhouseRoom {
+    id: string;
+    name: string;
+    floor: number;         // 0 = ground floor, 1 = second floor
+    position: 'left' | 'right';
+    isUnlocked: boolean;
+    layoutId: string;      // references a RoomLayout template
+    wallpaperLeft?: string;  // CSS gradient or image URL
+    wallpaperRight?: string;
+    floorStyle?: string;     // CSS gradient or image URL
+    stickers: DollhouseSticker[];
+    staffIds: string[];      // staff assigned to this room
+}
+
+export interface RoomLayout {
+    id: string;
+    name: string;
+    icon: string;
+    description: string;
+    apCost: number;
+    floorWidthRatio: number;   // relative width (0-1)
+    floorDepthRatio: number;   // relative depth (0-1)
+    hasCounter: boolean;
+    hasWindow: boolean;
+}
+
+export interface DollhouseState {
+    rooms: DollhouseRoom[];
+    activeRoomId: string | null;   // currently zoomed-in room
+    selectedLayoutId?: string;
+}
+
 export interface BankShopState {
     actionPoints: number;
     shopName: string;
@@ -409,11 +425,8 @@ export interface BankShopState {
         timestamp: number;
         giftAp?: number; // Optional gift from visitor
     };
-    guestbook?: BankGuestbookItem[]; // New: Guestbook messages
-    // Dollhouse decoration system
-    activeFloorPlanId?: string;
-    unlockedFloorPlans?: string[];
-    allRoomStates?: Record<string, ShopRoom[]>; // planId -> rooms for that plan
+    guestbook?: BankGuestbookItem[];
+    dollhouse?: DollhouseState;
 }
 
 export interface BankFullState {

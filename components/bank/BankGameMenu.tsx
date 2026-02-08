@@ -1,7 +1,7 @@
 
 import React, { useState, useRef } from 'react';
 import { BankFullState, ShopStaff, CharacterProfile } from '../../types';
-import { SHOP_RECIPES, AVAILABLE_STAFF, FLOOR_PLANS } from './BankGameConstants';
+import { SHOP_RECIPES, AVAILABLE_STAFF } from './BankGameConstants';
 import { processImage } from '../../utils/file';
 
 interface Props {
@@ -14,14 +14,13 @@ interface Props {
     onAddGoal: () => void;
     onDeleteGoal: (id: string) => void;
     onEditStaff: (staff: ShopStaff) => void;
-    onSwitchFloorPlan?: (planId: string) => void;
 }
 
 const BankGameMenu: React.FC<Props> = ({
     state, characters = [], onUnlockRecipe, onHireStaff, onStaffRest, onUpdateConfig,
-    onAddGoal, onDeleteGoal, onEditStaff, onSwitchFloorPlan
+    onAddGoal, onDeleteGoal, onEditStaff
 }) => {
-    const [tab, setTab] = useState<'menu' | 'staff' | 'layout' | 'goals'>('menu');
+    const [tab, setTab] = useState<'staff' | 'menu' | 'goals'>('menu');
     const [showCustomHire, setShowCustomHire] = useState(false);
 
     // Custom Hire Form
@@ -92,7 +91,6 @@ const BankGameMenu: React.FC<Props> = ({
                 {[
                     { key: 'menu', label: '菜单', icon: '🍰' },
                     { key: 'staff', label: '员工', icon: '👥' },
-                    { key: 'layout', label: '房型', icon: '🏠' },
                     { key: 'goals', label: '目标', icon: '🎯' }
                 ].map(t => (
                     <button
@@ -430,110 +428,6 @@ const BankGameMenu: React.FC<Props> = ({
                                 </div>
                             )}
                         </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Floor Plan / Layout Section */}
-            {tab === 'layout' && (
-                <div className="space-y-4">
-                    <div className="px-1">
-                        <h3 className="text-sm font-bold text-[#5D4037]">店铺房型</h3>
-                        <p className="text-[10px] text-[#A1887F] mt-0.5">解锁不同房型，每种房型有独立的装修进度</p>
-                    </div>
-
-                    <div className="space-y-3">
-                        {FLOOR_PLANS.map(plan => {
-                            const isActive = (state.shop.activeFloorPlanId || 'plan-standard') === plan.id;
-                            const isUnlocked = (state.shop.unlockedFloorPlans || ['plan-standard']).includes(plan.id);
-                            const roomCount = plan.roomDefs.length;
-                            const unlockedRoomCount = isUnlocked
-                                ? (state.shop.allRoomStates?.[plan.id] || []).filter(r => r.unlocked).length
-                                : 0;
-
-                            return (
-                                <div
-                                    key={plan.id}
-                                    className={`relative p-4 rounded-2xl transition-all duration-300 ${
-                                        isActive
-                                            ? 'bg-white shadow-lg border-2 border-[#8D6E63]'
-                                            : isUnlocked
-                                                ? 'bg-white shadow-md border border-[#E8DCC8]'
-                                                : 'bg-gradient-to-br from-[#F5F0E8] to-[#EDE5D8] border border-[#E0D5C5]'
-                                    }`}
-                                >
-                                    {isActive && (
-                                        <div className="absolute -top-2 -right-2 w-6 h-6 bg-gradient-to-br from-[#8D6E63] to-[#6D4C41] rounded-full flex items-center justify-center shadow-md">
-                                            <span className="text-white text-[10px] font-bold">✓</span>
-                                        </div>
-                                    )}
-
-                                    <div className="flex items-center justify-between">
-                                        <div className="flex items-center gap-3">
-                                            <div className={`w-14 h-14 rounded-xl flex items-center justify-center text-3xl shadow-inner ${
-                                                isUnlocked ? 'bg-gradient-to-br from-[#FFF8E1] to-[#FFE0B2]' : 'bg-[#F5F0E8] grayscale-[50%] opacity-70'
-                                            }`}>
-                                                {plan.icon}
-                                            </div>
-                                            <div>
-                                                <div className={`font-bold text-sm ${isUnlocked ? 'text-[#5D4037]' : 'text-[#8D6E63]'}`}>
-                                                    {plan.name}
-                                                </div>
-                                                <div className="text-[10px] text-[#A1887F] mt-0.5">
-                                                    {roomCount} 个房间
-                                                    {isUnlocked && ` · 已解锁 ${unlockedRoomCount}/${roomCount}`}
-                                                </div>
-                                                {/* Mini room layout preview */}
-                                                <div className="flex gap-0.5 mt-1.5">
-                                                    {[2, 1].map(layer => {
-                                                        const layerRooms = plan.roomDefs.filter(r => r.layer === layer);
-                                                        return (
-                                                            <div key={layer} className="flex gap-0.5">
-                                                                {layerRooms.map(r => (
-                                                                    <div
-                                                                        key={r.id}
-                                                                        className={`h-3 rounded-sm border ${
-                                                                            r.position === 'full' ? 'w-8' : 'w-4'
-                                                                        } ${isUnlocked ? 'border-[#8D6E63] bg-[#EFEBE9]' : 'border-[#BCAAA4] bg-[#F5F0E8]'}`}
-                                                                    ></div>
-                                                                ))}
-                                                            </div>
-                                                        );
-                                                    })}
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        <div>
-                                            {isActive ? (
-                                                <span className="px-3 py-1.5 rounded-xl text-xs font-bold text-[#8D6E63] bg-[#EFEBE9]">
-                                                    使用中
-                                                </span>
-                                            ) : isUnlocked ? (
-                                                <button
-                                                    onClick={() => onSwitchFloorPlan?.(plan.id)}
-                                                    className="px-4 py-2 rounded-xl text-xs font-bold bg-gradient-to-r from-[#8D6E63] to-[#6D4C41] text-white shadow-md hover:shadow-lg active:scale-95 transition-all"
-                                                >
-                                                    切换
-                                                </button>
-                                            ) : (
-                                                <button
-                                                    onClick={() => onSwitchFloorPlan?.(plan.id)}
-                                                    className="px-4 py-2 rounded-xl text-xs font-bold bg-gradient-to-r from-[#FF8A65] to-[#FF7043] text-white shadow-md hover:shadow-lg active:scale-95 transition-all"
-                                                >
-                                                    解锁 · {plan.cost} AP
-                                                </button>
-                                            )}
-                                        </div>
-                                    </div>
-                                </div>
-                            );
-                        })}
-                    </div>
-
-                    <div className="bg-[#FDF6E3] p-3 rounded-xl border border-[#E8DCC8] text-[10px] text-[#A1887F] flex items-start gap-2">
-                        <span className="text-base">💡</span>
-                        <span>每种房型独立保存装修进度。切换房型后，之前的装修不会丢失。双击店铺页的房间可以进入装饰模式。</span>
                     </div>
                 </div>
             )}

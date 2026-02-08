@@ -2,30 +2,15 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useOS } from '../context/OSContext';
 import { DB } from '../utils/db';
-import { BankFullState, BankTransaction, SavingsGoal, ShopStaff, BankGuestbookItem, ShopRoom } from '../types';
+import { BankFullState, BankTransaction, SavingsGoal, ShopStaff, BankGuestbookItem } from '../types';
 import Modal from '../components/os/Modal';
 import BankShopScene from '../components/bank/BankShopScene';
+import BankDollhouse from '../components/bank/BankDollhouse';
 import BankGameMenu from '../components/bank/BankGameMenu';
 import BankAnalytics from '../components/bank/BankAnalytics';
-import { SHOP_RECIPES, FLOOR_PLANS, ROOM_UNLOCK_COST } from '../components/bank/BankGameConstants';
+import { SHOP_RECIPES, INITIAL_DOLLHOUSE } from '../components/bank/BankGameConstants';
 import { processImage } from '../utils/file';
 import { ContextBuilder } from '../utils/context';
-
-// Helper: Create initial rooms from a floor plan definition
-const createRoomsFromPlan = (planId: string, firstRoomUnlocked: boolean = false): ShopRoom[] => {
-    const plan = FLOOR_PLANS.find(p => p.id === planId);
-    if (!plan) return [];
-    return plan.roomDefs.map((def, idx) => ({
-        id: def.id,
-        name: def.name,
-        layer: def.layer,
-        position: def.position,
-        unlocked: firstRoomUnlocked && idx === 0, // First room is free on default plan
-        wallpaper: '#FFFFFF',
-        floor: '#E0E0E0',
-        stickers: [],
-    }));
-};
 
 const INITIAL_STATE: BankFullState = {
     config: {
@@ -54,13 +39,7 @@ const INITIAL_STATE: BankFullState = {
         ],
         unlockedRecipes: ['recipe-coffee-001'],
         activeVisitor: undefined,
-        guestbook: [],
-        // Dollhouse system
-        activeFloorPlanId: 'plan-standard',
-        unlockedFloorPlans: ['plan-standard'],
-        allRoomStates: {
-            'plan-standard': createRoomsFromPlan('plan-standard', true),
-        },
+        guestbook: [] // New
     },
     goals: [],
     todaySpent: 0,
@@ -128,13 +107,9 @@ const BankApp: React.FC = () => {
         if (!currentState.shop.guestbook) {
             currentState.shop.guestbook = [];
         }
-        // Migration: Ensure dollhouse room state exists
-        if (!currentState.shop.activeFloorPlanId) {
-            currentState.shop.activeFloorPlanId = 'plan-standard';
-            currentState.shop.unlockedFloorPlans = ['plan-standard'];
-            currentState.shop.allRoomStates = {
-                'plan-standard': createRoomsFromPlan('plan-standard', true),
-            };
+        // Migration: Ensure dollhouse exists
+        if (!currentState.shop.dollhouse) {
+            currentState.shop.dollhouse = INITIAL_DOLLHOUSE;
         }
 
         // DAILY RESET LOGIC
@@ -470,116 +445,6 @@ ${previousGuestbook}
         setState(newState);
     };
 
-    // --- Room / Floor Plan Logic ---
-
-    const handleUnlockRoom = async (roomId: string) => {
-        const cost = ROOM_UNLOCK_COST;
-        if (state.shop.actionPoints < cost) {
-            addToast(`AP 不足 (需 ${cost})`, 'error');
-            return;
-        }
-
-        const planId = state.shop.activeFloorPlanId || 'plan-standard';
-        const currentRooms = state.shop.allRoomStates?.[planId] || [];
-        const room = currentRooms.find(r => r.id === roomId);
-        if (!room || room.unlocked) return;
-
-        const updatedRooms = currentRooms.map(r =>
-            r.id === roomId ? { ...r, unlocked: true } : r
-        );
-
-        const newState = {
-            ...state,
-            shop: {
-                ...state.shop,
-                actionPoints: state.shop.actionPoints - cost,
-                allRoomStates: {
-                    ...state.shop.allRoomStates,
-                    [planId]: updatedRooms,
-                },
-            }
-        };
-        await DB.saveBankState(newState);
-        setState(newState);
-        addToast(`${room.name} 已解锁！`, 'success');
-    };
-
-    const handleUpdateRoom = async (updatedRoom: ShopRoom) => {
-        const planId = state.shop.activeFloorPlanId || 'plan-standard';
-        const currentRooms = state.shop.allRoomStates?.[planId] || [];
-
-        const updatedRooms = currentRooms.map(r =>
-            r.id === updatedRoom.id ? updatedRoom : r
-        );
-
-        const newState = {
-            ...state,
-            shop: {
-                ...state.shop,
-                allRoomStates: {
-                    ...state.shop.allRoomStates,
-                    [planId]: updatedRooms,
-                },
-            }
-        };
-        await DB.saveBankState(newState);
-        setState(newState);
-    };
-
-    const handleSwitchFloorPlan = async (planId: string) => {
-        // Check if plan is unlocked
-        const unlockedPlans = state.shop.unlockedFloorPlans || ['plan-standard'];
-        if (!unlockedPlans.includes(planId)) {
-            // Need to unlock first
-            const plan = FLOOR_PLANS.find(p => p.id === planId);
-            if (!plan) return;
-            if (state.shop.actionPoints < plan.cost) {
-                addToast(`AP 不足 (需 ${plan.cost})`, 'error');
-                return;
-            }
-            // Unlock and switch
-            const newUnlocked = [...unlockedPlans, planId];
-            const existingRooms = state.shop.allRoomStates?.[planId];
-            const rooms = existingRooms || createRoomsFromPlan(planId, false);
-
-            const newState = {
-                ...state,
-                shop: {
-                    ...state.shop,
-                    actionPoints: state.shop.actionPoints - plan.cost,
-                    activeFloorPlanId: planId,
-                    unlockedFloorPlans: newUnlocked,
-                    allRoomStates: {
-                        ...state.shop.allRoomStates,
-                        [planId]: rooms,
-                    },
-                }
-            };
-            await DB.saveBankState(newState);
-            setState(newState);
-            addToast(`房型「${plan.name}」已解锁并切换！`, 'success');
-        } else {
-            // Already unlocked, just switch
-            const existingRooms = state.shop.allRoomStates?.[planId];
-            const rooms = existingRooms || createRoomsFromPlan(planId, false);
-
-            const newState = {
-                ...state,
-                shop: {
-                    ...state.shop,
-                    activeFloorPlanId: planId,
-                    allRoomStates: {
-                        ...state.shop.allRoomStates,
-                        [planId]: rooms,
-                    },
-                }
-            };
-            await DB.saveBankState(newState);
-            setState(newState);
-            addToast(`已切换到「${FLOOR_PLANS.find(p => p.id === planId)?.name}」`, 'success');
-        }
-    };
-
     const handleConfigUpdate = async (updates: Partial<typeof state.config>) => {
         const newState = { ...state, config: { ...state.config, ...updates } };
         await DB.saveBankState(newState);
@@ -652,9 +517,9 @@ ${previousGuestbook}
             {/* Main Content Area */}
             <div className="flex-1 overflow-hidden relative z-10 flex flex-col">
                 
-                {/* 1. Game View (Shop Scene) */}
+                {/* 1. Game View (Dollhouse) */}
                 {activeTab === 'game' && (
-                    <BankShopScene
+                    <BankDollhouse
                         shopState={state.shop}
                         characters={characters}
                         userProfile={userProfile}
@@ -665,10 +530,7 @@ ${previousGuestbook}
                             setState(newState);
                         }}
                         onStaffClick={handleOpenStaffEdit}
-                        onMoveStaff={handleMoveStaff}
                         onOpenGuestbook={() => setShowGuestbook(true)}
-                        onUnlockRoom={handleUnlockRoom}
-                        onUpdateRoom={handleUpdateRoom}
                     />
                 )}
 
@@ -707,7 +569,6 @@ ${previousGuestbook}
                                 setState(newState);
                             }}
                             onEditStaff={handleOpenStaffEdit}
-                            onSwitchFloorPlan={handleSwitchFloorPlan}
                         />
                     </div>
                 )}
@@ -999,11 +860,9 @@ ${previousGuestbook}
                         <div>
                             <div className="font-bold text-base mb-1">互动操作</div>
                             <p className="text-xs text-[#5C6BC0] leading-relaxed">
-                                • 双击房间可以放大查看和装饰<br/>
-                                • 点击锁定的房间可用 AP 解锁<br/>
-                                • 解锁后可自定义墙纸、地板、贴纸<br/>
-                                • 点击🛎️按钮邀请角色进店<br/>
-                                • 在经营页可切换不同房型
+                                • 点击情报志可查看和刷新八卦<br/>
+                                • 点击地板可以让店长走过去<br/>
+                                • 点击🛎️按钮邀请角色进店
                             </p>
                         </div>
                     </div>
