@@ -308,6 +308,34 @@ export interface DateState {
     peekStatus: string; 
 }
 
+// --- SHOP DECORATION / DOLLHOUSE TYPES ---
+export interface ShopRoomSticker {
+    id: string;
+    content: string; // emoji or image URL
+    x: number; // 0-100% within room
+    y: number; // 0-100% within room
+    scale: number;
+}
+
+export interface ShopRoom {
+    id: string;
+    name: string;
+    layer: number; // 1 = ground floor, 2 = upper floor
+    position: 'left' | 'right' | 'full';
+    unlocked: boolean;
+    wallpaper: string; // CSS background value
+    floor: string; // CSS background value
+    stickers: ShopRoomSticker[];
+}
+
+export interface ShopFloorPlanDef {
+    id: string;
+    name: string;
+    icon: string;
+    cost: number; // AP cost to unlock
+    roomDefs: { id: string; name: string; layer: number; position: 'left' | 'right' | 'full' }[];
+}
+
 // --- BANK / SHOP GAME TYPES (NEW) ---
 export interface BankTransaction {
     id: string;
@@ -382,6 +410,10 @@ export interface BankShopState {
         giftAp?: number; // Optional gift from visitor
     };
     guestbook?: BankGuestbookItem[]; // New: Guestbook messages
+    // Dollhouse decoration system
+    activeFloorPlanId?: string;
+    unlockedFloorPlans?: string[];
+    allRoomStates?: Record<string, ShopRoom[]>; // planId -> rooms for that plan
 }
 
 export interface BankFullState {
