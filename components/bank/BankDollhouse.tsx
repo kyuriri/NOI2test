@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
     BankShopState, DollhouseState, DollhouseRoom, DollhouseSticker,
@@ -22,6 +21,7 @@ const ROOM_UNLOCK_COSTS: Record<string, number> = {
 const TILE = 120; // width of each room's floor diamond
 const WALL_H = 100; // wall height in isometric space
 const FLOOR_SEP = 8; // separator between floors
+const FLOOR_SLAB_H = 10; // visible floor slab thickness shared by adjacent floors
 
 // ==================== PROPS ====================
 interface Props {
@@ -292,6 +292,7 @@ const BankDollhouse: React.FC<Props> = ({
     }, [draggingSticker, handleStickerDragMove, handleStickerDragEnd]);
 
     // ==================== ISOMETRIC ROOM RENDERER ====================
+    // Keep the existing UI controls intact. This component is a dollhouse, not a UI card collection.
     // Each room is a true isometric box with:
     //   - Diamond floor (rhombus) using CSS transform
     //   - Left wall (parallelogram rising from left edge of diamond)
@@ -324,9 +325,10 @@ const BankDollhouse: React.FC<Props> = ({
             return false;
         });
 
-        // The iso room bounding box: width = t, height = wh + t/2
+        // The iso room bounding box: width = t, height = wh + t/2 + floor slab
         // Diamond floor sits at bottom, walls rise above
-        const totalH = wh + ht;
+        const slabH = isZoomed ? FLOOR_SLAB_H * 1.5 : FLOOR_SLAB_H;
+        const totalH = wh + ht + slabH;
 
         // Render stickers on a surface
         const renderStickers = (surface: 'floor' | 'leftWall' | 'rightWall') => {
@@ -379,7 +381,7 @@ const BankDollhouse: React.FC<Props> = ({
                         width: ht,
                         height: wh,
                         left: 0,
-                        bottom: qt,
+                        bottom: qt + slabH,
                         background: locked ? 'linear-gradient(180deg, #F0F0F0, #E0E0E0)' : leftWall,
                         transform: 'skewY(26.565deg)',  // atan(0.5) = 26.565° for true 2:1 isometric
                         transformOrigin: 'bottom left',
@@ -434,7 +436,7 @@ const BankDollhouse: React.FC<Props> = ({
                         width: ht,
                         height: wh,
                         right: 0,
-                        bottom: qt,
+                        bottom: qt + slabH,
                         background: locked ? 'linear-gradient(180deg, #E8E8E8, #D8D8D8)' : rightWall,
                         transform: 'skewY(-26.565deg)',  // negative for the other side
                         transformOrigin: 'bottom right',
@@ -454,6 +456,20 @@ const BankDollhouse: React.FC<Props> = ({
                     {!locked && renderStickers('rightWall')}
                 </div>
 
+                {/* back edge beam makes wall/floor intersection explicit */}
+                <div
+                    className="absolute"
+                    style={{
+                        left: '50%',
+                        bottom: slabH + qt - 1,
+                        width: t * 0.78,
+                        height: 2,
+                        transform: 'translateX(-50%)',
+                        background: 'rgba(86, 63, 44, 0.45)',
+                        zIndex: 2,
+                    }}
+                />
+
                 {/* ======= FLOOR (diamond / rhombus) ======= */}
                 {/* The diamond is created by rotating a square 45deg and scaling */}
                 <div
@@ -463,7 +479,7 @@ const BankDollhouse: React.FC<Props> = ({
                         width: t * 0.707,  // sqrt(2)/2 * t ≈ 0.707t → after rotation becomes t wide
                         height: t * 0.707,
                         left: '50%',
-                        bottom: 0,
+                        bottom: slabH,
                         transform: 'translateX(-50%) rotate(45deg) scaleY(0.5)',
                         transformOrigin: 'center center',
                         background: locked ? 'linear-gradient(135deg, #E0E0E0, #D0D0D0)' : floorBg,
@@ -497,6 +513,25 @@ const BankDollhouse: React.FC<Props> = ({
 
                     {!locked && renderStickers('floor')}
                 </div>
+
+                {/* ======= FLOOR SLAB (shared structure support) ======= */}
+                <div
+                    className="absolute"
+                    style={{
+                        width: t,
+                        height: slabH,
+                        left: 0,
+                        bottom: 0,
+                        background: locked
+                            ? 'linear-gradient(180deg, #CFCFCF, #B8B8B8)'
+                            : 'linear-gradient(180deg, rgba(125,98,72,0.75), rgba(94,70,49,0.95))',
+                        borderBottomLeftRadius: 2,
+                        borderBottomRightRadius: 2,
+                        boxShadow: '0 2px 6px rgba(0,0,0,0.15)',
+                        clipPath: 'polygon(24% 0, 76% 0, 100% 100%, 0 100%)',
+                        zIndex: 3,
+                    }}
+                />
 
                 {/* ======= STAFF (positioned on floor area) ======= */}
                 {!locked && roomStaff.map((staff) => {
@@ -579,9 +614,8 @@ const BankDollhouse: React.FC<Props> = ({
     // In isometric, two adjacent rooms form a wider diamond
 
     // Scaled dimensions for overview
-    const s = zoomedRoomId ? 2 : 1;
     const roomW = TILE;
-    const roomTotalH = WALL_H + TILE / 2;
+    const roomTotalH = WALL_H + TILE / 2 + FLOOR_SLAB_H;
     const floorBlockH = roomTotalH; // height of one floor's rooms
 
     // Building total size
@@ -594,10 +628,10 @@ const BankDollhouse: React.FC<Props> = ({
         const isLeft = position === 'left';
         // Horizontal: left room at x=0, right room shifted right
         const x = isLeft ? TILE * 0.25 : TILE * 0.75;
-        // Vertical: 2F is on top, 1F below
-        const floorOffset = floor === 1 ? 0 : floorBlockH + FLOOR_SEP;
+        // Vertical: use one shared stack so 2F sits directly on top of 1F slab
+        const floorOffset = floor === 2 ? 0 : floorBlockH + FLOOR_SEP;
         // In isometric, the right room is offset down by TILE/4
-        const isoOffsetY = isLeft ? TILE / 8 : 0;
+        const isoOffsetY = isLeft ? 0 : TILE / 8;
         return { x, y: floorOffset + isoOffsetY + 40 }; // +40 for roof space
     };
 
@@ -698,7 +732,7 @@ const BankDollhouse: React.FC<Props> = ({
                 {/* ===== FLOOR SEPARATOR (between 1F and 2F) ===== */}
                 <div className="absolute z-5" style={{
                     left: '50%',
-                    top: getRoomPosition(1, 'left').y + roomTotalH - 5,
+                    top: getRoomPosition(2, 'left').y + roomTotalH - FLOOR_SLAB_H,
                     transform: 'translateX(-50%)',
                 }}>
                     <div style={{
@@ -713,7 +747,7 @@ const BankDollhouse: React.FC<Props> = ({
                 {/* ===== ROOMS ===== */}
                 {/* 2F Left */}
                 {floor2Left && (() => {
-                    const pos = getRoomPosition(1, 'left');
+                    const pos = getRoomPosition(2, 'left');
                     return (
                         <div className="absolute" style={{ left: pos.x, top: pos.y, zIndex: 5 }}>
                             {renderIsoRoom(floor2Left, zoomedRoomId === floor2Left.id)}
@@ -722,7 +756,7 @@ const BankDollhouse: React.FC<Props> = ({
                 })()}
                 {/* 2F Right */}
                 {floor2Right && (() => {
-                    const pos = getRoomPosition(1, 'right');
+                    const pos = getRoomPosition(2, 'right');
                     return (
                         <div className="absolute" style={{ left: pos.x, top: pos.y, zIndex: 4 }}>
                             {renderIsoRoom(floor2Right, zoomedRoomId === floor2Right.id)}
@@ -731,7 +765,7 @@ const BankDollhouse: React.FC<Props> = ({
                 })()}
                 {/* 1F Left */}
                 {floor1Left && (() => {
-                    const pos = getRoomPosition(0, 'left');
+                    const pos = getRoomPosition(1, 'left');
                     return (
                         <div className="absolute" style={{ left: pos.x, top: pos.y, zIndex: 5 }}>
                             {renderIsoRoom(floor1Left, zoomedRoomId === floor1Left.id)}
@@ -740,7 +774,7 @@ const BankDollhouse: React.FC<Props> = ({
                 })()}
                 {/* 1F Right */}
                 {floor1Right && (() => {
-                    const pos = getRoomPosition(0, 'right');
+                    const pos = getRoomPosition(1, 'right');
                     return (
                         <div className="absolute" style={{ left: pos.x, top: pos.y, zIndex: 4 }}>
                             {renderIsoRoom(floor1Right, zoomedRoomId === floor1Right.id)}
