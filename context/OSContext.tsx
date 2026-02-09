@@ -1,8 +1,60 @@
 
 import React, { createContext, useContext, useEffect, useState, useRef, useCallback } from 'react';
-import JSZip from 'jszip';
 import { APIConfig, AppID, OSTheme, VirtualTime, CharacterProfile, ChatTheme, Toast, FullBackupData, UserProfile, ApiPreset, GroupProfile, SystemLog, Worldbook, NovelBook, Message, RealtimeConfig } from '../types';
 import { DB } from '../utils/db';
+
+
+type JSZipLike = {
+  folder: (name: string) => { file: (name: string, data: string, options?: { base64?: boolean }) => void } | null;
+  file: (name: string) => { async: (type: 'string') => Promise<string> } | null;
+  generateAsync: (options: { type: 'blob' }, onUpdate?: (metadata: { percent: number }) => void) => Promise<Blob>;
+};
+
+type JSZipCtorLike = {
+  new (): JSZipLike;
+  loadAsync: (file: File) => Promise<JSZipLike>;
+};
+
+const dynamicImport = new Function('m', 'return import(m)') as (m: string) => Promise<any>;
+let jszipCtorPromise: Promise<JSZipCtorLike> | null = null;
+
+const loadScript = (src: string): Promise<void> => new Promise((resolve, reject) => {
+  const existing = document.querySelector(`script[data-src=\"${src}\"]`) as HTMLScriptElement | null;
+  if (existing) {
+    if ((existing as any).dataset.loaded === 'true') {
+      resolve();
+      return;
+    }
+    existing.addEventListener('load', () => resolve(), { once: true });
+    existing.addEventListener('error', () => reject(new Error(`load failed: ${src}`)), { once: true });
+    return;
+  }
+
+  const script = document.createElement('script');
+  script.src = src;
+  script.async = true;
+  script.dataset.src = src;
+  script.onload = () => {
+    script.dataset.loaded = 'true';
+    resolve();
+  };
+  script.onerror = () => reject(new Error(`load failed: ${src}`));
+  document.head.appendChild(script);
+});
+
+const loadJSZip = async (): Promise<JSZipCtorLike> => {
+  if (!jszipCtorPromise) {
+    jszipCtorPromise = dynamicImport('jszip')
+      .then((mod) => ((mod as any).default || mod) as JSZipCtorLike)
+      .catch(async () => {
+        await loadScript('https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js');
+        const ctor = (window as any).JSZip as JSZipCtorLike | undefined;
+        if (!ctor) throw new Error('JSZip 加载失败');
+        return ctor;
+      });
+  }
+  return jszipCtorPromise;
+};
 
 // 默认实时配置
 const defaultRealtimeConfig: RealtimeConfig = {
@@ -899,6 +951,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       try {
           setSysOperation({ status: 'processing', message: '正在初始化打包引擎...', progress: 0 });
           
+          const JSZip = await loadJSZip();
           const zip = new JSZip();
           const assetsFolder = zip.folder("assets");
           let assetCount = 0;
@@ -1118,7 +1171,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
       try {
           setSysOperation({ status: 'processing', message: '正在解析备份文件...', progress: 0 });
           let data: FullBackupData;
-          let zip: JSZip | null = null;
+          let zip: JSZipLike | null = null;
 
           if (typeof fileOrJson === 'string') {
               data = JSON.parse(fileOrJson);
@@ -1131,6 +1184,7 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                       throw new Error("无效的文件格式，请上传 .zip 或 .json");
                   }
               } else {
+                  const JSZip = await loadJSZip();
                   const loadedZip = await JSZip.loadAsync(fileOrJson);
                   zip = loadedZip;
                   const dataFile = loadedZip.file("data.json");
