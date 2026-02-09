@@ -519,15 +519,26 @@ const BankDollhouse: React.FC<Props> = ({
     };
 
     // ==================== SCENE LAYOUT ====================
-    // Mobile-first vertical layout:
-    //   - Main room (大厅): full-width, taller
-    //   - Sub-rooms: 2-column grid, smaller
-    // When zoomed: selected room fills entire container
+    // 两列布局，参照手绘图：
+    //   左列: D(上,较矮) + A(下,最高/咖啡店)
+    //   右列: C(上,较矮) + B(下,较高)
+    // 所有房间竖向(portrait)，高度 > 宽度
+    // 双击聚焦时房间铺满整个容器
 
     const dh = getDollhouse();
     const zoomedRoom = zoomedRoomId ? getRoom(zoomedRoomId) : null;
-    const mainRoom = dh.rooms.find(r => r.id === MAIN_ROOM_ID);
-    const subRooms = dh.rooms.filter(r => r.id !== MAIN_ROOM_ID);
+
+    // 房间映射: A=大厅(1f-left), B=后厨(1f-right), C=VIP(2f-right), D=休息室(2f-left)
+    const roomA = dh.rooms.find(r => r.id === 'room-1f-left');   // 咖啡店主房间
+    const roomB = dh.rooms.find(r => r.id === 'room-1f-right');  // 自定义
+    const roomC = dh.rooms.find(r => r.id === 'room-2f-right');  // 自定义
+    const roomD = dh.rooms.find(r => r.id === 'room-2f-left');   // 自定义
+
+    // 无限AP（测试用）
+    const handleInfiniteAP = async () => {
+        await updateState({ ...shopState, actionPoints: shopState.actionPoints + 9999 });
+        addToast('+9999 AP!', 'success');
+    };
 
     return (
         <div
@@ -537,40 +548,49 @@ const BankDollhouse: React.FC<Props> = ({
                 background: 'linear-gradient(180deg, #FEF7E8 0%, #FDF2DC 40%, #E8DCC8 100%)',
             }}
         >
-            {/* === ZOOMED VIEW: room fills entire container === */}
+            {/* === 聚焦视图：房间铺满整个容器 === */}
             {zoomedRoomId && zoomedRoom && (
-                <div className="absolute inset-0 z-30 transition-all duration-300">
+                <div className="absolute inset-0 z-30">
                     {renderRoomModule(zoomedRoom, true)}
                 </div>
             )}
 
-            {/* === OVERVIEW: scrollable vertical layout === */}
+            {/* === 总览：两列竖向布局 === */}
             {!zoomedRoomId && (
                 <div
-                    className="absolute inset-0 overflow-y-auto overflow-x-hidden px-3 pt-12 pb-3"
-                    style={{ WebkitOverflowScrolling: 'touch' }}
+                    className="absolute inset-0 flex pt-12 pb-3 px-3"
+                    style={{ gap: ROOM_GAP }}
                 >
-                    <div className="flex flex-col" style={{ gap: ROOM_GAP }}>
-                        {/* Main room - full width, taller */}
-                        {mainRoom && (
-                            <div style={{ width: '100%', height: 200 }}>
-                                {renderRoomModule(mainRoom, false)}
+                    {/* 左列: D(上) + A(下，更高) */}
+                    <div className="flex-1 flex flex-col min-h-0" style={{ gap: ROOM_GAP }}>
+                        {roomD && (
+                            <div style={{ flex: 2 }}>
+                                {renderRoomModule(roomD, false)}
                             </div>
                         )}
-
-                        {/* Sub-rooms - 2-column grid, shorter */}
-                        <div className="grid grid-cols-2" style={{ gap: ROOM_GAP }}>
-                            {subRooms.map(room => (
-                                <div key={room.id} style={{ height: 140 }}>
-                                    {renderRoomModule(room, false)}
-                                </div>
-                            ))}
-                        </div>
+                        {roomA && (
+                            <div style={{ flex: 3 }}>
+                                {renderRoomModule(roomA, false)}
+                            </div>
+                        )}
+                    </div>
+                    {/* 右列: C(上) + B(下，更高) */}
+                    <div className="flex-1 flex flex-col min-h-0" style={{ gap: ROOM_GAP }}>
+                        {roomC && (
+                            <div style={{ flex: 2 }}>
+                                {renderRoomModule(roomC, false)}
+                            </div>
+                        )}
+                        {roomB && (
+                            <div style={{ flex: 3 }}>
+                                {renderRoomModule(roomB, false)}
+                            </div>
+                        )}
                     </div>
                 </div>
             )}
 
-            {/* === HUD: Top-left Appeal === */}
+            {/* === HUD: 左上角人气 === */}
             <div className="absolute top-3 left-3 z-40">
                 <div className="bg-white/70 backdrop-blur-xl px-3 py-1.5 rounded-xl shadow-lg border border-white/50 flex items-center gap-2">
                     <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-[#FFD54F] to-[#FFB300] flex items-center justify-center shadow-md">
@@ -583,7 +603,7 @@ const BankDollhouse: React.FC<Props> = ({
                 </div>
             </div>
 
-            {/* === HUD: Top-right Guestbook === */}
+            {/* === HUD: 右上角情报志 === */}
             <button
                 onClick={(e) => { e.stopPropagation(); onOpenGuestbook(); }}
                 className="absolute top-3 right-3 z-40 group hover:scale-105 active:scale-95 transition-all"
@@ -592,6 +612,14 @@ const BankDollhouse: React.FC<Props> = ({
                     <div className="text-lg">📖</div>
                     <div className="text-[6px] font-bold text-[#D7CCC8]">情报志</div>
                 </div>
+            </button>
+
+            {/* === DEBUG: 无限AP按钮（测试用） === */}
+            <button
+                onClick={handleInfiniteAP}
+                className="absolute top-3 left-1/2 -translate-x-1/2 z-40 bg-red-500/80 backdrop-blur-sm text-white text-[10px] font-bold px-3 py-1.5 rounded-full shadow-lg active:scale-95 transition-all"
+            >
+                +9999 AP
             </button>
 
             {/* === ZOOM OUT BUTTON === */}
