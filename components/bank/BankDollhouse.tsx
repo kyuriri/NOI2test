@@ -64,6 +64,10 @@ const BankDollhouse: React.FC<Props> = ({
     const [textureScale, setTextureScale] = useState(1);
     const textureInputRef = useRef<HTMLInputElement>(null);
 
+    // Sticker drag state
+    const [draggingStickerInfo, setDraggingStickerInfo] = useState<{ stickerId: string; roomId: string; surface: string } | null>(null);
+    const stickerLongPressRef = useRef<number | null>(null);
+
     const getDollhouse = (): DollhouseState => shopState.dollhouse || INITIAL_DOLLHOUSE;
     const dh = getDollhouse();
 
@@ -155,18 +159,19 @@ const BankDollhouse: React.FC<Props> = ({
             setActorPositions(prev => {
                 const updated: Record<string, { x: number; y: number }> = { ...prev };
                 Object.entries(prev).forEach(([id, pos]) => {
-                    if (Math.random() > 0.55) return;
-                    const dx = (Math.random() - 0.5) * 5.5;
-                    const dy = (Math.random() - 0.5) * 3.2;
+                    if (Math.random() > 0.4) return;
+                    const dx = (Math.random() - 0.5) * 3;
+                    const dy = (Math.random() - 0.5) * 1.8;
                     updated[id] = clampActorPos(pos.x + dx, pos.y + dy);
                 });
                 return updated;
             });
-        }, 2200);
+        }, 3200);
 
         return () => {
             window.clearInterval(timer);
             cancelLongPress();
+            cancelStickerLongPress();
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
@@ -306,6 +311,61 @@ const BankDollhouse: React.FC<Props> = ({
         await saveDollhouse({
             ...dh,
             rooms: dh.rooms.map(r => r.id === roomId ? { ...r, stickers: r.stickers.filter(s => s.id !== stickerId) } : r)
+        });
+    };
+
+    const cancelStickerLongPress = () => {
+        if (stickerLongPressRef.current !== null) {
+            window.clearTimeout(stickerLongPressRef.current);
+            stickerLongPressRef.current = null;
+        }
+    };
+
+    const handleStickerPressStart = (stickerId: string, roomId: string, surface: string) => {
+        cancelStickerLongPress();
+        stickerLongPressRef.current = window.setTimeout(() => {
+            setDraggingStickerInfo({ stickerId, roomId, surface });
+        }, 280);
+    };
+
+    const handleStickerPointerMove = (roomId: string, surface: 'floor' | 'leftWall' | 'rightWall', e: React.PointerEvent<HTMLDivElement>) => {
+        if (!draggingStickerInfo || draggingStickerInfo.roomId !== roomId) return;
+        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+        const xPct = ((e.clientX - rect.left) / rect.width) * 100;
+        const yPct = ((e.clientY - rect.top) / rect.height) * 100;
+        const clampedX = Math.max(5, Math.min(95, xPct));
+        const clampedY = Math.max(5, Math.min(95, yPct));
+
+        const newRooms = dh.rooms.map(r => {
+            if (r.id !== roomId) return r;
+            return {
+                ...r,
+                stickers: r.stickers.map(s =>
+                    s.id === draggingStickerInfo.stickerId ? { ...s, x: clampedX, y: clampedY } : s
+                )
+            };
+        });
+        // Update locally without persisting on every move
+        saveDollhouse({ ...dh, rooms: newRooms });
+    };
+
+    const handleStickerPointerUp = async () => {
+        cancelStickerLongPress();
+        if (draggingStickerInfo) {
+            // Position already saved via saveDollhouse during move
+            setDraggingStickerInfo(null);
+        }
+    };
+
+    const handleStickerScaleChange = async (roomId: string, stickerId: string, delta: number) => {
+        await saveDollhouse({
+            ...dh,
+            rooms: dh.rooms.map(r => r.id === roomId ? {
+                ...r,
+                stickers: r.stickers.map(s =>
+                    s.id === stickerId ? { ...s, scale: Math.max(0.3, Math.min(3, s.scale + delta)) } : s
+                )
+            } : r)
         });
     };
 
@@ -466,49 +526,70 @@ const BankDollhouse: React.FC<Props> = ({
                     onPointerCancel={handleRoomPointerUp}
                     onPointerLeave={handleRoomPointerUp}
                 >
-                    <div className="absolute left-0 right-0 top-0" style={{ height: `${WALL_H_RATIO * 100}%`, background: wallBg }}>
+                    <div
+                        className="absolute left-0 right-0 top-0"
+                        style={{ height: `${WALL_H_RATIO * 100}%`, background: wallBg }}
+                        onPointerMove={(e) => draggingStickerInfo && handleStickerPointerMove(room.id, 'leftWall', e)}
+                        onPointerUp={handleStickerPointerUp}
+                        onPointerCancel={handleStickerPointerUp}
+                    >
                         <div className="absolute inset-0 opacity-20" style={{ backgroundImage: 'radial-gradient(circle at 2px 2px, #fff 1.5px, transparent 2px)', backgroundSize: '20px 20px' }} />
-                        {!locked && wallStickers.map(sticker => (
-                            <div
-                                key={sticker.id}
-                                className="absolute select-none cursor-pointer"
-                                style={{ left: `${sticker.x}%`, top: `${sticker.y}%`, transform: `translate(-50%, -50%) scale(${sticker.scale})`, zIndex: sticker.zIndex, fontSize: immersive ? '1.7rem' : '1.35rem' }}
-                                onDoubleClick={() => handleDeleteSticker(room.id, sticker.id)}
-                            >
-                                {sticker.url}
-                            </div>
-                        ))}
+                        {!locked && wallStickers.map(sticker => {
+                            const isDraggingThis = draggingStickerInfo?.stickerId === sticker.id;
+                            const isUrl = sticker.url.startsWith('http') || sticker.url.startsWith('data');
+                            return (
+                                <div
+                                    key={sticker.id}
+                                    className={`absolute select-none transition-shadow ${isDraggingThis ? 'cursor-grabbing ring-2 ring-[#FF8E6B] ring-offset-1 rounded-lg' : 'cursor-grab'}`}
+                                    style={{ left: `${sticker.x}%`, top: `${sticker.y}%`, transform: `translate(-50%, -50%) scale(${sticker.scale})`, zIndex: isDraggingThis ? 50 : sticker.zIndex, fontSize: immersive ? '1.7rem' : '1.35rem' }}
+                                    onPointerDown={(e) => { e.stopPropagation(); handleStickerPressStart(sticker.id, room.id, sticker.surface); }}
+                                    onPointerUp={(e) => { e.stopPropagation(); handleStickerPointerUp(); }}
+                                    onDoubleClick={() => handleDeleteSticker(room.id, sticker.id)}
+                                >
+                                    {isUrl ? <img src={sticker.url} alt="" className="w-10 h-10 object-contain" draggable={false} /> : sticker.url}
+                                </div>
+                            );
+                        })}
                     </div>
 
                     <div
                         className="absolute left-0 right-0 bottom-0"
                         style={{ height: `${FLOOR_H_RATIO * 100}%`, background: floorBg, borderTop: '3px solid rgba(156,104,64,0.22)' }}
+                        onPointerMove={(e) => draggingStickerInfo && handleStickerPointerMove(room.id, 'floor', e)}
+                        onPointerUp={handleStickerPointerUp}
+                        onPointerCancel={handleStickerPointerUp}
                     >
                         <div className="absolute inset-0 opacity-10" style={{ backgroundImage: 'linear-gradient(0deg, rgba(0,0,0,0.2) 1px, transparent 1px),linear-gradient(90deg, rgba(0,0,0,0.2) 1px, transparent 1px)', backgroundSize: '22px 22px' }} />
 
-                        {!locked && floorStickers.map(sticker => (
-                            <div
-                                key={sticker.id}
-                                className="absolute select-none cursor-pointer"
-                                style={{ left: `${sticker.x}%`, top: `${sticker.y}%`, transform: `translate(-50%, -50%) scale(${sticker.scale})`, zIndex: sticker.zIndex, fontSize: immersive ? '1.7rem' : '1.35rem' }}
-                                onDoubleClick={() => handleDeleteSticker(room.id, sticker.id)}
-                            >
-                                {sticker.url}
-                            </div>
-                        ))}
+                        {!locked && floorStickers.map(sticker => {
+                            const isDraggingThis = draggingStickerInfo?.stickerId === sticker.id;
+                            const isUrl = sticker.url.startsWith('http') || sticker.url.startsWith('data');
+                            return (
+                                <div
+                                    key={sticker.id}
+                                    className={`absolute select-none transition-shadow ${isDraggingThis ? 'cursor-grabbing ring-2 ring-[#FF8E6B] ring-offset-1 rounded-lg' : 'cursor-grab'}`}
+                                    style={{ left: `${sticker.x}%`, top: `${sticker.y}%`, transform: `translate(-50%, -50%) scale(${sticker.scale})`, zIndex: isDraggingThis ? 50 : sticker.zIndex, fontSize: immersive ? '1.7rem' : '1.35rem' }}
+                                    onPointerDown={(e) => { e.stopPropagation(); handleStickerPressStart(sticker.id, room.id, sticker.surface); }}
+                                    onPointerUp={(e) => { e.stopPropagation(); handleStickerPointerUp(); }}
+                                    onDoubleClick={() => handleDeleteSticker(room.id, sticker.id)}
+                                >
+                                    {isUrl ? <img src={sticker.url} alt="" className="w-10 h-10 object-contain" draggable={false} /> : sticker.url}
+                                </div>
+                            );
+                        })}
                     </div>
 
                     {!locked && roomTexture && (
-                        <div className="absolute inset-0 pointer-events-none z-20">
-                            <div
-                                className="absolute inset-0"
+                        <div className="absolute inset-0 pointer-events-none z-[5]" style={{ willChange: 'auto', isolation: 'isolate' }}>
+                            <img
+                                src={roomTexture}
+                                alt=""
+                                draggable={false}
+                                className="absolute inset-0 w-full h-full object-contain"
                                 style={{
-                                    backgroundImage: `url("${roomTexture}")`,
-                                    backgroundPosition: 'center',
-                                    backgroundRepeat: 'no-repeat',
-                                    backgroundSize: 'contain',
                                     transform: `scale(${roomTextureScale})`,
                                     transformOrigin: 'center center',
+                                    willChange: 'transform',
                                 }}
                             />
                         </div>
@@ -519,7 +600,7 @@ const BankDollhouse: React.FC<Props> = ({
                         return (
                             <div
                                 key={staff.id}
-                                className={`absolute ${draggingActorId === staff.id ? 'cursor-grabbing' : 'cursor-pointer'} select-none transition-transform duration-700`}
+                                className={`absolute ${draggingActorId === staff.id ? 'cursor-grabbing' : 'cursor-pointer'} select-none transition-all duration-[1600ms] ease-in-out`}
                                 style={{ left: `${pos.x}%`, top: `${pos.y}%`, transform: 'translate(-50%, -100%)', zIndex: 30 }}
                                 onPointerDown={(e) => { e.stopPropagation(); handleActorPressStart(staff.id, room.id, false); }}
                                 onPointerUp={(e) => {
@@ -538,7 +619,7 @@ const BankDollhouse: React.FC<Props> = ({
                         const visitorPos = actorPositions[visitor.id] || clampActorPos(shopState.activeVisitor.x ?? 55, shopState.activeVisitor.y ?? 76);
                         return (
                             <div
-                                className={`absolute ${draggingActorId === visitor.id ? 'cursor-grabbing' : 'cursor-grab'} select-none transition-transform duration-700`}
+                                className={`absolute ${draggingActorId === visitor.id ? 'cursor-grabbing' : 'cursor-grab'} select-none transition-all duration-[1600ms] ease-in-out`}
                                 style={{ left: `${visitorPos.x}%`, top: `${visitorPos.y}%`, transform: 'translate(-50%, -100%)', zIndex: 35 }}
                                 onPointerDown={(e) => { e.stopPropagation(); handleActorPressStart(visitor.id, room.id, true); }}
                                 onPointerUp={(e) => { e.stopPropagation(); void handleRoomPointerUp(); }}
@@ -578,7 +659,7 @@ const BankDollhouse: React.FC<Props> = ({
                 {renderArrowButton('right', goNextRoom)}
             </div>
 
-            <div className="absolute right-3 top-[72px] z-20 flex flex-col gap-2">
+            <div className="absolute right-3 top-[72px] z-[40] flex flex-col gap-2">
                 <button
                     onClick={() => { setShowDecorPanel(true); setDecorTab('furniture'); }}
                     className="w-11 h-11 rounded-2xl bg-gradient-to-r from-[#FF9A75] to-[#FF7D6A] text-white text-lg shadow-md"
@@ -675,22 +756,54 @@ const BankDollhouse: React.FC<Props> = ({
                         )}
 
                         {decorTab === 'roomTexture' && (
-                            <div className="space-y-3"> 
-                                <button onClick={() => openTextureModal('room')} className="w-full py-2 rounded-xl bg-[#FF8E6B] text-white text-xs font-bold">上传全屋贴图（本地/图床）</button>
-                                <div className="text-[10px] text-[#8A5A3D]">当前缩放：{(activeRoom.roomTextureScale ?? 1).toFixed(2)}x</div>
-                                {activeRoom.roomTextureUrl && (
-                                    <>
-                                        <img src={activeRoom.roomTextureUrl} className="w-full h-24 object-contain rounded-lg border border-[#F2D2B6] bg-[#FFF8F2]" />
+                            <div className="space-y-3">
+                                <button onClick={() => openTextureModal('room')} className="w-full py-3 rounded-xl bg-gradient-to-r from-[#FF8E6B] to-[#FF7D5A] text-white text-xs font-bold shadow-md">
+                                    上传全屋贴图（本地/图床）
+                                </button>
+
+                                {activeRoom.roomTextureUrl ? (
+                                    <div className="bg-[#FDF8F2] rounded-xl p-3 border border-[#F2E5D6] space-y-2">
+                                        <div className="text-[11px] text-[#7A5238] font-bold">当前贴图</div>
+                                        <div className="rounded-lg overflow-hidden border border-[#E8DAC6] shadow-inner" style={{ aspectRatio: '4/3' }}>
+                                            <div className="relative w-full h-full" style={{ background: toCssBackground(activeRoom.wallpaperLeft, 'linear-gradient(180deg, #FFF5E9, #FDE5D8)') }}>
+                                                <div className="absolute left-0 right-0 bottom-0" style={{ height: `${FLOOR_H_RATIO * 100}%`, background: toCssBackground(activeRoom.floorStyle, 'linear-gradient(135deg, #D6B48C, #C69767)') }} />
+                                                <img
+                                                    src={activeRoom.roomTextureUrl}
+                                                    alt="texture"
+                                                    className="absolute inset-0 w-full h-full object-contain"
+                                                    style={{ transform: `scale(${activeRoom.roomTextureScale ?? 1})`, transformOrigin: 'center center' }}
+                                                />
+                                            </div>
+                                        </div>
+
+                                        <div className="flex items-center justify-between">
+                                            <div className="text-[10px] text-[#8A5A3D]">缩放</div>
+                                            <div className="text-[10px] text-[#B8956E] font-mono">{(activeRoom.roomTextureScale ?? 1).toFixed(2)}x</div>
+                                        </div>
+                                        <input
+                                            type="range" min={0.5} max={2.5} step={0.05}
+                                            value={activeRoom.roomTextureScale ?? 1}
+                                            onChange={async (e) => {
+                                                const scale = parseFloat(e.target.value);
+                                                await saveDollhouse({ ...dh, rooms: dh.rooms.map(r => r.id === activeRoom.id ? { ...r, roomTextureScale: scale } : r) });
+                                            }}
+                                            className="w-full accent-[#FF8E6B]"
+                                        />
+
                                         <button
                                             onClick={async () => {
                                                 await saveDollhouse({ ...dh, rooms: dh.rooms.map(r => r.id === activeRoom.id ? { ...r, roomTextureUrl: undefined, roomTextureScale: 1 } : r) });
                                                 addToast('已清除全屋贴图', 'success');
                                             }}
-                                            className="w-full py-2 rounded-lg bg-[#FCE4E4] text-[#AF4444] text-xs font-bold"
+                                            className="w-full py-2 rounded-xl bg-[#FCE4E4] text-[#AF4444] text-xs font-bold border border-[#F5CDCD]"
                                         >
-                                            清除全屋贴图
+                                            清除贴图
                                         </button>
-                                    </>
+                                    </div>
+                                ) : (
+                                    <div className="text-center py-6 text-[10px] text-[#B8956E]">
+                                        暂无全屋贴图，点击上方按钮上传
+                                    </div>
                                 )}
                             </div>
                         )}
@@ -724,7 +837,7 @@ const BankDollhouse: React.FC<Props> = ({
                                         </div>
                                     ))}
                                 </div>
-                                <p className="mt-2 text-[10px] text-[#A67E62]">提示：双击房间里的家具可删除。</p>
+                                <p className="mt-2 text-[10px] text-[#A67E62]">提示：长按家具可拖动位置，双击可删除。</p>
                             </>
                         )}
                     </div>
@@ -748,18 +861,69 @@ const BankDollhouse: React.FC<Props> = ({
 
             {showTextureModal && (
                 <div className="absolute inset-0 z-[95] bg-black/35 flex items-center justify-center" onClick={() => setShowTextureModal(false)}>
-                    <div className="w-[90%] bg-white rounded-2xl p-3" onClick={e => e.stopPropagation()}>
-                        <div className="text-sm font-bold text-[#7A5238] mb-2">上传自定义贴图</div>
-                        <input value={textureUrl} onChange={(e) => setTextureUrl(e.target.value)} placeholder="图床URL 或本地上传" className="w-full mb-2 px-2 py-2 rounded-lg border border-[#E9D0BD] text-sm" />
+                    <div className="w-[92%] max-h-[85vh] bg-white rounded-2xl p-4 overflow-y-auto" onClick={e => e.stopPropagation()}>
+                        <div className="flex items-center justify-between mb-3">
+                            <div className="text-sm font-bold text-[#7A5238]">
+                                {textureTarget === 'room' ? '全屋贴图' : textureTarget === 'wallpaper' ? '自定义墙纸' : '自定义地板'}
+                            </div>
+                            <button onClick={() => setShowTextureModal(false)} className="w-7 h-7 rounded-full bg-[#F4E6DA] text-[#8A5A3D] text-xs font-bold">x</button>
+                        </div>
+
+                        {/* Live Preview */}
                         {textureTarget === 'room' && (
-                            <div className="mb-2">
-                                <div className="text-[11px] text-[#8A5A3D] mb-1">全屋缩放：{textureScale.toFixed(2)}x</div>
-                                <input type="range" min={0.5} max={2.5} step={0.05} value={textureScale} onChange={(e) => setTextureScale(parseFloat(e.target.value))} className="w-full" />
+                            <div className="mb-3 rounded-xl overflow-hidden border border-[#E8DAC6] shadow-inner" style={{ aspectRatio: '4/3' }}>
+                                <div className="relative w-full h-full" style={{ background: toCssBackground(activeRoom.wallpaperLeft, 'linear-gradient(180deg, #FFF5E9, #FDE5D8)') }}>
+                                    <div className="absolute left-0 right-0 bottom-0" style={{ height: `${FLOOR_H_RATIO * 100}%`, background: toCssBackground(activeRoom.floorStyle, 'linear-gradient(135deg, #D6B48C, #C69767)') }} />
+                                    {textureUrl && (
+                                        <div className="absolute inset-0">
+                                            <img
+                                                src={textureUrl}
+                                                alt="preview"
+                                                draggable={false}
+                                                className="absolute inset-0 w-full h-full object-contain"
+                                                style={{ transform: `scale(${textureScale})`, transformOrigin: 'center center' }}
+                                            />
+                                        </div>
+                                    )}
+                                    {!textureUrl && (
+                                        <div className="absolute inset-0 flex items-center justify-center text-[#B8956E]/50 text-xs font-bold">
+                                            上传图片后预览
+                                        </div>
+                                    )}
+                                </div>
                             </div>
                         )}
-                        <div className="flex gap-2 mb-2">
-                            <button onClick={() => textureInputRef.current?.click()} className="flex-1 py-2 rounded-lg bg-[#F7E8DB] text-[#7A5238] text-xs font-bold">上传本地图片</button>
-                            <button onClick={handleSaveCustomTexture} className="flex-1 py-2 rounded-lg bg-[#FF8E6B] text-white text-xs font-bold">保存</button>
+
+                        {textureTarget !== 'room' && textureUrl && (
+                            <div className="mb-3 h-20 rounded-xl overflow-hidden border border-[#E8DAC6]">
+                                <div className="w-full h-full" style={{ background: toCssBackground(textureUrl) }} />
+                            </div>
+                        )}
+
+                        <input value={textureUrl} onChange={(e) => setTextureUrl(e.target.value)} placeholder="图床URL 或本地上传" className="w-full mb-2 px-3 py-2.5 rounded-xl border border-[#E9D0BD] text-sm bg-[#FDFAF5]" />
+
+                        {textureTarget === 'room' && (
+                            <div className="mb-3 bg-[#FDF8F2] rounded-xl p-3 border border-[#F2E5D6]">
+                                <div className="flex items-center justify-between mb-2">
+                                    <div className="text-[11px] text-[#8A5A3D] font-bold">缩放</div>
+                                    <div className="text-[11px] text-[#B8956E] font-mono">{textureScale.toFixed(2)}x</div>
+                                </div>
+                                <input type="range" min={0.5} max={2.5} step={0.05} value={textureScale} onChange={(e) => setTextureScale(parseFloat(e.target.value))} className="w-full accent-[#FF8E6B]" />
+                                <div className="flex justify-between text-[9px] text-[#C4A882] mt-1">
+                                    <span>0.5x</span>
+                                    <span>1.0x</span>
+                                    <span>2.5x</span>
+                                </div>
+                            </div>
+                        )}
+
+                        <div className="flex gap-2">
+                            <button onClick={() => textureInputRef.current?.click()} className="flex-1 py-2.5 rounded-xl bg-[#F7E8DB] text-[#7A5238] text-xs font-bold border border-[#E9D0BD]">
+                                上传本地图片
+                            </button>
+                            <button onClick={handleSaveCustomTexture} className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-[#FF8E6B] to-[#FF7D5A] text-white text-xs font-bold shadow-md">
+                                保存
+                            </button>
                         </div>
                         <input ref={textureInputRef} type="file" accept="image/*" onChange={handleTextureUpload} className="hidden" />
                     </div>
