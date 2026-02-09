@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
     BankShopState, DollhouseState, DollhouseRoom, DollhouseSticker,
     ShopStaff, CharacterProfile, UserProfile, APIConfig, RoomLayout
@@ -16,12 +16,12 @@ const ROOM_UNLOCK_COSTS: Record<string, number> = {
     'room-2f-right': 300,
 };
 
-// True isometric: each room is a 3D box viewed from 45° above
-// TILE = the diamond-shaped floor tile size in isometric pixels
-const TILE = 120; // width of each room's floor diamond
-const WALL_H = 100; // wall height in isometric space
-const FLOOR_SEP = 8; // separator between floors
-const FLOOR_SLAB_H = 10; // visible floor slab thickness shared by adjacent floors
+// Room module dimensions (Fallout Shelter style)
+const ROOM_W = 280;
+const ROOM_H = 180;
+const FLOOR_H_RATIO = 0.3;   // bottom 30% is walkable floor
+const WALL_H_RATIO = 0.7;    // top 70% is wall backdrop
+const ROOM_GAP = 6;
 
 // ==================== PROPS ====================
 interface Props {
@@ -33,12 +33,6 @@ interface Props {
     onStaffClick?: (staff: ShopStaff) => void;
     onOpenGuestbook: () => void;
 }
-
-// ==================== HELPERS for isometric projection ====================
-// Convert (x, y) in grid space to isometric screen coordinates
-// In isometric: screen_x = (x - y) * TILE/2, screen_y = (x + y) * TILE/4
-const isoX = (col: number, row: number) => (col - row) * (TILE / 2);
-const isoY = (col: number, row: number) => (col + row) * (TILE / 4);
 
 // ==================== COMPONENT ====================
 const BankDollhouse: React.FC<Props> = ({
@@ -58,7 +52,6 @@ const BankDollhouse: React.FC<Props> = ({
     const [showUnlockConfirm, setShowUnlockConfirm] = useState<string | null>(null);
     const [showLayoutPicker, setShowLayoutPicker] = useState<string | null>(null);
     const [stickerTab, setStickerTab] = useState<string>('decor');
-    const containerRef = useRef<HTMLDivElement>(null);
 
     // --- Helpers ---
     const getDollhouse = (): DollhouseState => shopState.dollhouse || INITIAL_DOLLHOUSE;
@@ -70,13 +63,13 @@ const BankDollhouse: React.FC<Props> = ({
     const getRoom = (id: string): DollhouseRoom | undefined => getDollhouse().rooms.find(r => r.id === id);
     const getLayout = (layoutId: string): RoomLayout | undefined => ROOM_LAYOUTS.find(l => l.id === layoutId);
 
-    // --- Zoom ---
-    const handleRoomDoubleClick = (roomId: string) => {
+    // --- Zoom (tap a room to focus) ---
+    const handleRoomTap = (roomId: string) => {
         const room = getRoom(roomId);
         if (!room || !room.isUnlocked || isAnimating) return;
         setIsAnimating(true);
         setZoomedRoomId(roomId);
-        setTimeout(() => setIsAnimating(false), 500);
+        setTimeout(() => setIsAnimating(false), 400);
     };
 
     const handleZoomOut = () => {
@@ -84,7 +77,7 @@ const BankDollhouse: React.FC<Props> = ({
         setIsAnimating(true);
         setEditMode('none');
         setZoomedRoomId(null);
-        setTimeout(() => setIsAnimating(false), 500);
+        setTimeout(() => setIsAnimating(false), 400);
     };
 
     // --- Unlock Room ---
@@ -195,15 +188,16 @@ const BankDollhouse: React.FC<Props> = ({
         await saveDollhouse({ ...dh, rooms: newRooms });
     };
 
-    // --- Staff movement ---
+    // --- Staff movement (room-local coordinates) ---
     const handleFloorClick = (roomId: string, e: React.MouseEvent<HTMLDivElement>) => {
         if (editMode !== 'none') return;
         const room = getRoom(roomId);
         if (!room || !room.isUnlocked) return;
 
         const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-        const xPct = ((e.clientX - rect.left) / rect.width) * 100;
-        const yPct = ((e.clientY - rect.top) / rect.height) * 100;
+        // x,y as percentage within the walkable floor area
+        const xPct = Math.max(5, Math.min(95, ((e.clientX - rect.left) / rect.width) * 100));
+        const yPct = Math.max(10, Math.min(90, ((e.clientY - rect.top) / rect.height) * 100));
 
         const staffInRoom = shopState.staff.filter(s => {
             const dh = getDollhouse();
@@ -214,7 +208,7 @@ const BankDollhouse: React.FC<Props> = ({
         if (!staffToMove) return;
 
         const dh = getDollhouse();
-        let needsRoomAssign = !dh.rooms.some(r => r.staffIds.includes(staffToMove.id) && r.id === roomId);
+        const needsRoomAssign = !dh.rooms.some(r => r.staffIds.includes(staffToMove.id) && r.id === roomId);
 
         const newStaff = shopState.staff.map(s =>
             s.id === staffToMove.id ? { ...s, x: xPct, y: yPct } : s
@@ -237,7 +231,7 @@ const BankDollhouse: React.FC<Props> = ({
         });
     };
 
-    // --- Sticker drag ---
+    // --- Sticker drag (room-local) ---
     const handleStickerDragStart = (sticker: DollhouseSticker, e: React.MouseEvent | React.TouchEvent) => {
         e.stopPropagation();
         e.preventDefault();
@@ -255,21 +249,18 @@ const BankDollhouse: React.FC<Props> = ({
         const dy = clientY - dragOffset.y;
         setDragOffset({ x: clientX, y: clientY });
 
+        // Find the surface element within the room module
         const surfaceEl = document.getElementById(`surface-${draggingSticker.surface}-${zoomedRoomId}`);
         if (!surfaceEl) return;
         const rect = surfaceEl.getBoundingClientRect();
         const dxPct = (dx / rect.width) * 100;
         const dyPct = (dy / rect.height) * 100;
 
-        handleUpdateSticker(zoomedRoomId, draggingSticker.id, {
-            x: Math.max(0, Math.min(100, draggingSticker.x + dxPct)),
-            y: Math.max(0, Math.min(100, draggingSticker.y + dyPct)),
-        });
-        setDraggingSticker({
-            ...draggingSticker,
-            x: Math.max(0, Math.min(100, draggingSticker.x + dxPct)),
-            y: Math.max(0, Math.min(100, draggingSticker.y + dyPct)),
-        });
+        const newX = Math.max(0, Math.min(100, draggingSticker.x + dxPct));
+        const newY = Math.max(0, Math.min(100, draggingSticker.y + dyPct));
+
+        handleUpdateSticker(zoomedRoomId, draggingSticker.id, { x: newX, y: newY });
+        setDraggingSticker({ ...draggingSticker, x: newX, y: newY });
     }, [draggingSticker, dragOffset, zoomedRoomId]);
 
     const handleStickerDragEnd = useCallback(() => {
@@ -291,32 +282,28 @@ const BankDollhouse: React.FC<Props> = ({
         }
     }, [draggingSticker, handleStickerDragMove, handleStickerDragEnd]);
 
-    // ==================== ISOMETRIC ROOM RENDERER ====================
-    // Keep the existing UI controls intact. This component is a dollhouse, not a UI card collection.
-    // Each room is a true isometric box with:
-    //   - Diamond floor (rhombus) using CSS transform
-    //   - Left wall (parallelogram rising from left edge of diamond)
-    //   - Right wall (parallelogram rising from right edge of diamond)
-    // The entire building is composed in 2D but uses isometric math for positioning
+    // ==================== ROOM MODULE RENDERER ====================
+    // Each room is an independent module with its own local coordinate system.
+    // Layers (bottom to top): floor -> wall -> furniture_layer -> sticker_layer -> character_layer
+    // No shared geometry with other rooms.
 
-    const renderIsoRoom = (room: DollhouseRoom, isZoomed: boolean) => {
+    const renderRoomModule = (room: DollhouseRoom, isZoomed: boolean) => {
         const layout = getLayout(room.layoutId) || ROOM_LAYOUTS[0];
         const locked = !room.isUnlocked;
-        const isOtherRoom = zoomedRoomId && zoomedRoomId !== room.id;
+        const isOtherRoom = zoomedRoomId !== null && zoomedRoomId !== room.id;
+        const isActive = zoomedRoomId === room.id;
 
-        const t = isZoomed ? TILE * 2 : TILE;
-        const wh = isZoomed ? WALL_H * 2 : WALL_H;
+        const w = isZoomed && isActive ? ROOM_W * 1.8 : ROOM_W;
+        const h = isZoomed && isActive ? ROOM_H * 1.8 : ROOM_H;
+        const floorAreaH = h * FLOOR_H_RATIO;
+        const wallAreaH = h * WALL_H_RATIO;
 
-        // half-tile for diamond math
-        const ht = t / 2;
-        const qt = t / 4; // quarter tile (diamond height = t/2, half of that = t/4)
-
-        // Default styles
+        // Styles
         const leftWall = room.wallpaperLeft || 'linear-gradient(180deg, #F8F6F0, #EBE5D8)';
         const rightWall = room.wallpaperRight || 'linear-gradient(180deg, #EFEDE6, #E0DCD0)';
         const floorBg = room.floorStyle || 'linear-gradient(135deg, #E8E4D8, #D8D4C8)';
 
-        // Staff
+        // Staff in this room
         const roomStaff = shopState.staff.filter(s => {
             const dh = getDollhouse();
             const r = dh.rooms.find(rm => rm.staffIds.includes(s.id));
@@ -325,258 +312,222 @@ const BankDollhouse: React.FC<Props> = ({
             return false;
         });
 
-        // The iso room bounding box: width = t, height = wh + t/2 + floor slab
-        // Diamond floor sits at bottom, walls rise above
-        const slabH = isZoomed ? FLOOR_SLAB_H * 1.5 : FLOOR_SLAB_H;
-        const totalH = wh + ht + slabH;
-
-        // Render stickers on a surface
+        // Render stickers on a given surface
         const renderStickers = (surface: 'floor' | 'leftWall' | 'rightWall') => {
             return room.stickers.filter(s => s.surface === surface).map(sticker => (
                 <div
                     key={sticker.id}
-                    className={`absolute select-none ${isZoomed ? 'cursor-grab active:cursor-grabbing' : ''} ${draggingSticker?.id === sticker.id ? 'z-50 opacity-80' : ''}`}
+                    className={`absolute select-none ${isActive ? 'cursor-grab active:cursor-grabbing' : ''} ${draggingSticker?.id === sticker.id ? 'z-50 opacity-80' : ''}`}
                     style={{
                         left: `${sticker.x}%`,
                         top: `${sticker.y}%`,
-                        transform: `translate(-50%, -50%) scale(${sticker.scale * (isZoomed ? 1.6 : 0.8)}) rotate(${sticker.rotation}deg)`,
+                        transform: `translate(-50%, -50%) scale(${sticker.scale * (isActive ? 1.4 : 0.9)}) rotate(${sticker.rotation}deg)`,
                         zIndex: sticker.zIndex,
-                        fontSize: isZoomed ? '1.5rem' : '0.75rem',
+                        fontSize: isActive ? '1.4rem' : '0.85rem',
                     }}
-                    onMouseDown={(e) => isZoomed && editMode === 'sticker' && handleStickerDragStart(sticker, e)}
-                    onTouchStart={(e) => isZoomed && editMode === 'sticker' && handleStickerDragStart(sticker, e)}
+                    onMouseDown={(e) => isActive && editMode === 'sticker' && handleStickerDragStart(sticker, e)}
+                    onTouchStart={(e) => isActive && editMode === 'sticker' && handleStickerDragStart(sticker, e)}
                     onDoubleClick={(e) => {
                         e.stopPropagation();
-                        if (isZoomed && editMode === 'sticker') {
+                        if (isActive && editMode === 'sticker') {
                             handleDeleteSticker(room.id, sticker.id);
                         }
                     }}
                 >
                     {sticker.url.startsWith('http') || sticker.url.startsWith('data')
-                        ? <img src={sticker.url} className="object-contain pointer-events-none" style={{ width: isZoomed ? 32 : 16, height: isZoomed ? 32 : 16 }} />
+                        ? <img src={sticker.url} className="object-contain pointer-events-none" style={{ width: isActive ? 28 : 16, height: isActive ? 28 : 16 }} />
                         : sticker.url
                     }
                 </div>
             ));
         };
 
+        // Render character layer (staff on walkable area)
+        const renderCharacters = () => {
+            if (locked) return null;
+            return roomStaff.map((staff) => {
+                // Staff x,y are percentages within the walkable floor area
+                const sx = staff.x || 50;
+                const sy = staff.y || 60;
+                return (
+                    <div
+                        key={staff.id}
+                        className="absolute transition-all duration-700 ease-in-out cursor-pointer group"
+                        style={{
+                            left: `${sx}%`,
+                            top: `${sy}%`,
+                            transform: 'translate(-50%, -100%)',
+                            zIndex: 30,
+                        }}
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            onStaffClick?.(staff);
+                        }}
+                    >
+                        <div className="relative">
+                            {/* Shadow */}
+                            <div className="absolute bottom-0 left-1/2 -translate-x-1/2 bg-black/10 rounded-full blur-[2px]"
+                                style={{ width: isActive ? 18 : 10, height: isActive ? 5 : 3 }} />
+                            {/* Fatigue indicator */}
+                            {staff.fatigue > 80 && <div className="absolute -top-4 left-1/2 -translate-x-1/2 text-xs animate-bounce">💤</div>}
+                            {/* Avatar */}
+                            <div className={`filter drop-shadow-md transform group-hover:scale-110 transition-transform ${isActive ? 'text-2xl' : 'text-base'}`}>
+                                {staff.avatar.startsWith('http') || staff.avatar.startsWith('data')
+                                    ? <img src={staff.avatar} className={`object-contain rounded-lg ${isActive ? 'w-8 h-8' : 'w-5 h-5'}`} />
+                                    : staff.avatar
+                                }
+                            </div>
+                            {/* Name label */}
+                            <div className={`absolute -bottom-3 left-1/2 -translate-x-1/2 whitespace-nowrap bg-white/90 backdrop-blur-sm rounded-full border border-slate-200 shadow-sm ${isActive ? 'text-[8px] px-1.5 py-0.5' : 'text-[6px] px-1 py-px'}`}>
+                                {staff.isPet && <span className="mr-0.5">🐾</span>}
+                                {staff.name}
+                            </div>
+                        </div>
+                    </div>
+                );
+            });
+        };
+
         return (
             <div
                 key={room.id}
-                className={`absolute select-none transition-all duration-500 ease-in-out ${
-                    isOtherRoom ? 'opacity-10 pointer-events-none' : 'opacity-100'
-                } ${locked ? 'cursor-pointer' : 'cursor-default'}`}
-                style={{ width: t, height: totalH }}
-                onDoubleClick={() => !locked && handleRoomDoubleClick(room.id)}
+                className={`relative select-none overflow-hidden transition-all duration-400 ease-in-out ${
+                    isOtherRoom ? 'opacity-10 pointer-events-none scale-95' : 'opacity-100'
+                } ${locked ? 'cursor-pointer' : ''}`}
+                style={{
+                    width: w,
+                    height: h,
+                    borderRadius: isActive ? 12 : 8,
+                    boxShadow: isActive
+                        ? '0 8px 32px rgba(93,64,55,0.25), inset 0 0 0 2px rgba(255,112,67,0.4)'
+                        : '0 2px 12px rgba(93,64,55,0.12), inset 0 0 0 1px rgba(141,110,99,0.15)',
+                }}
+                onDoubleClick={() => !locked && !isActive && handleRoomTap(room.id)}
                 onClick={() => locked && setShowUnlockConfirm(room.id)}
             >
-                {/* ======= LEFT WALL (parallelogram) ======= */}
-                {/* The left wall is a parallelogram: bottom-left of diamond going up */}
-                {/* Shape: bottom edge goes from bottom-center to left-point of diamond */}
-                {/* We use a div with skew transform */}
-                <div
-                    id={`surface-leftWall-${room.id}`}
-                    className="absolute overflow-hidden"
-                    style={{
-                        width: ht,
-                        height: wh,
-                        left: 0,
-                        bottom: qt + slabH,
-                        background: locked ? 'linear-gradient(180deg, #F0F0F0, #E0E0E0)' : leftWall,
-                        transform: 'skewY(26.565deg)',  // atan(0.5) = 26.565° for true 2:1 isometric
-                        transformOrigin: 'bottom left',
-                        borderLeft: '2px solid rgba(120,100,80,0.25)',
-                        borderTop: '2px solid rgba(120,100,80,0.15)',
-                        zIndex: 1,
-                    }}
-                >
-                    {/* Shadow gradient for depth */}
-                    <div className="absolute inset-0" style={{
-                        background: 'linear-gradient(to right, rgba(0,0,0,0.03), rgba(0,0,0,0.08))',
-                    }} />
-                    {/* Decorative wallpaper pattern overlay */}
-                    <div className="absolute inset-0 opacity-[0.04]" style={{
-                        backgroundImage: 'radial-gradient(circle, rgba(0,0,0,0.3) 1px, transparent 1px)',
-                        backgroundSize: isZoomed ? '16px 16px' : '8px 8px',
-                    }} />
-                    {/* Window on left wall if layout has one */}
-                    {!locked && layout.hasWindow && (
-                        <div className="absolute overflow-hidden" style={{
-                            top: '15%', left: '20%', width: '55%', height: '40%',
-                            borderRadius: isZoomed ? 6 : 3,
-                            border: `${isZoomed ? 3 : 2}px solid #A09080`,
-                        }}>
-                            <div className="w-full h-full" style={{
-                                background: 'linear-gradient(135deg, #D4EAFC, #A8D4F0, #7EC8E3)',
+                {/* ====== LAYER 1: WALL BACKDROP ====== */}
+                {/* Two halves: left wall and right wall, side by side */}
+                <div className="absolute top-0 left-0 right-0" style={{ height: wallAreaH }}>
+                    {/* Left wall half */}
+                    <div
+                        id={`surface-leftWall-${room.id}`}
+                        className="absolute top-0 left-0 overflow-hidden"
+                        style={{
+                            width: '50%',
+                            height: '100%',
+                            background: locked ? 'linear-gradient(180deg, #F0F0F0, #E0E0E0)' : leftWall,
+                        }}
+                    >
+                        {/* Depth shading */}
+                        <div className="absolute inset-0" style={{
+                            background: 'linear-gradient(to right, rgba(0,0,0,0.04), rgba(0,0,0,0.01))',
+                        }} />
+                        {/* Subtle dot pattern */}
+                        <div className="absolute inset-0 opacity-[0.04]" style={{
+                            backgroundImage: 'radial-gradient(circle, rgba(0,0,0,0.3) 1px, transparent 1px)',
+                            backgroundSize: isActive ? '14px 14px' : '8px 8px',
+                        }} />
+                        {/* Window (if layout has one) */}
+                        {!locked && layout.hasWindow && (
+                            <div className="absolute overflow-hidden" style={{
+                                top: '15%', left: '15%', width: '60%', height: '45%',
+                                borderRadius: isActive ? 6 : 3,
+                                border: `${isActive ? 3 : 2}px solid #A09080`,
                             }}>
-                                <div className="absolute inset-0" style={{
-                                    background: 'linear-gradient(135deg, rgba(255,255,255,0.4) 0%, transparent 60%)',
-                                }} />
-                                {/* Window cross */}
-                                <div className="absolute top-1/2 left-0 w-full bg-[#A09080]" style={{ height: isZoomed ? 2 : 1 }} />
-                                <div className="absolute top-0 left-1/2 h-full bg-[#A09080]" style={{ width: isZoomed ? 2 : 1 }} />
+                                <div className="w-full h-full" style={{
+                                    background: 'linear-gradient(135deg, #D4EAFC, #A8D4F0, #7EC8E3)',
+                                }}>
+                                    <div className="absolute inset-0" style={{
+                                        background: 'linear-gradient(135deg, rgba(255,255,255,0.4) 0%, transparent 60%)',
+                                    }} />
+                                    <div className="absolute top-1/2 left-0 w-full bg-[#A09080]" style={{ height: isActive ? 2 : 1 }} />
+                                    <div className="absolute top-0 left-1/2 h-full bg-[#A09080]" style={{ width: isActive ? 2 : 1 }} />
+                                </div>
                             </div>
-                            {/* Curtain hints */}
-                            <div className="absolute top-0 left-0 w-[20%] h-full" style={{
-                                background: 'linear-gradient(to right, rgba(150,180,200,0.5), transparent)',
-                            }} />
-                            <div className="absolute top-0 right-0 w-[20%] h-full" style={{
-                                background: 'linear-gradient(to left, rgba(150,180,200,0.5), transparent)',
-                            }} />
-                        </div>
-                    )}
-                    {!locked && renderStickers('leftWall')}
+                        )}
+                        {/* Sticker layer for left wall */}
+                        {!locked && renderStickers('leftWall')}
+                    </div>
+
+                    {/* Right wall half */}
+                    <div
+                        id={`surface-rightWall-${room.id}`}
+                        className="absolute top-0 right-0 overflow-hidden"
+                        style={{
+                            width: '50%',
+                            height: '100%',
+                            background: locked ? 'linear-gradient(180deg, #E8E8E8, #D8D8D8)' : rightWall,
+                        }}
+                    >
+                        <div className="absolute inset-0" style={{
+                            background: 'linear-gradient(to left, rgba(0,0,0,0.03), rgba(0,0,0,0.06))',
+                        }} />
+                        <div className="absolute inset-0 opacity-[0.04]" style={{
+                            backgroundImage: 'radial-gradient(circle, rgba(0,0,0,0.3) 1px, transparent 1px)',
+                            backgroundSize: isActive ? '14px 14px' : '8px 8px',
+                        }} />
+                        {!locked && renderStickers('rightWall')}
+                    </div>
+
+                    {/* Center seam (wall join line) */}
+                    <div className="absolute top-0 left-1/2 h-full" style={{
+                        width: 1,
+                        background: 'rgba(120,100,80,0.15)',
+                        transform: 'translateX(-0.5px)',
+                    }} />
                 </div>
 
-                {/* ======= RIGHT WALL (parallelogram) ======= */}
-                <div
-                    id={`surface-rightWall-${room.id}`}
-                    className="absolute overflow-hidden"
-                    style={{
-                        width: ht,
-                        height: wh,
-                        right: 0,
-                        bottom: qt + slabH,
-                        background: locked ? 'linear-gradient(180deg, #E8E8E8, #D8D8D8)' : rightWall,
-                        transform: 'skewY(-26.565deg)',  // negative for the other side
-                        transformOrigin: 'bottom right',
-                        borderRight: '2px solid rgba(120,100,80,0.25)',
-                        borderTop: '2px solid rgba(120,100,80,0.15)',
-                        zIndex: 1,
-                    }}
-                >
-                    {/* Slightly darker side for depth illusion */}
-                    <div className="absolute inset-0" style={{
-                        background: 'linear-gradient(to left, rgba(0,0,0,0.02), rgba(0,0,0,0.1))',
-                    }} />
-                    <div className="absolute inset-0 opacity-[0.04]" style={{
-                        backgroundImage: 'radial-gradient(circle, rgba(0,0,0,0.3) 1px, transparent 1px)',
-                        backgroundSize: isZoomed ? '16px 16px' : '8px 8px',
-                    }} />
-                    {!locked && renderStickers('rightWall')}
-                </div>
-
-                {/* back edge beam makes wall/floor intersection explicit */}
-                <div
-                    className="absolute"
-                    style={{
-                        left: '50%',
-                        bottom: slabH + qt - 1,
-                        width: t * 0.78,
-                        height: 2,
-                        transform: 'translateX(-50%)',
-                        background: 'rgba(86, 63, 44, 0.45)',
-                        zIndex: 2,
-                    }}
-                />
-
-                {/* ======= FLOOR (diamond / rhombus) ======= */}
-                {/* The diamond is created by rotating a square 45deg and scaling */}
+                {/* ====== LAYER 2: FLOOR ====== */}
                 <div
                     id={`surface-floor-${room.id}`}
-                    className="absolute overflow-hidden"
+                    className="absolute left-0 right-0 bottom-0 overflow-hidden"
                     style={{
-                        width: t * 0.707,  // sqrt(2)/2 * t ≈ 0.707t → after rotation becomes t wide
-                        height: t * 0.707,
-                        left: '50%',
-                        bottom: slabH,
-                        transform: 'translateX(-50%) rotate(45deg) scaleY(0.5)',
-                        transformOrigin: 'center center',
+                        height: floorAreaH,
                         background: locked ? 'linear-gradient(135deg, #E0E0E0, #D0D0D0)' : floorBg,
-                        borderBottom: '2px solid rgba(120,100,80,0.2)',
-                        borderRight: '2px solid rgba(120,100,80,0.2)',
-                        zIndex: 2,
+                        borderTop: '2px solid rgba(120,100,80,0.2)',
                     }}
                     onClick={(e) => !locked && !isOtherRoom && handleFloorClick(room.id, e)}
                 >
-                    {/* Floor grid for depth feel */}
+                    {/* Floor grid lines for depth */}
                     <div className="absolute inset-0 opacity-[0.08]" style={{
                         backgroundImage: `
                             linear-gradient(0deg, rgba(0,0,0,0.2) 1px, transparent 1px),
                             linear-gradient(90deg, rgba(0,0,0,0.2) 1px, transparent 1px)
                         `,
-                        backgroundSize: isZoomed ? '28px 28px' : '14px 14px',
+                        backgroundSize: isActive ? '24px 24px' : '14px 14px',
                     }} />
 
-                    {/* Counter if layout has one */}
+                    {/* Counter (if layout has one) */}
                     {!locked && layout.hasCounter && (
                         <div className="absolute" style={{
-                            width: '50%',
-                            height: isZoomed ? 16 : 8,
-                            left: '25%',
-                            top: '20%',
+                            width: '35%',
+                            height: isActive ? 14 : 8,
+                            left: '10%',
+                            top: '15%',
                             background: 'linear-gradient(180deg, #6D4C41, #4E342E)',
                             border: '1px solid #3E2723',
                             borderRadius: 2,
                         }} />
                     )}
 
+                    {/* Sticker layer for floor */}
                     {!locked && renderStickers('floor')}
                 </div>
 
-                {/* ======= FLOOR SLAB (shared structure support) ======= */}
+                {/* ====== LAYER 3: CHARACTER LAYER (on top of floor) ====== */}
+                {/* Characters are positioned relative to the floor area */}
                 <div
-                    className="absolute"
-                    style={{
-                        width: t,
-                        height: slabH,
-                        left: 0,
-                        bottom: 0,
-                        background: locked
-                            ? 'linear-gradient(180deg, #CFCFCF, #B8B8B8)'
-                            : 'linear-gradient(180deg, rgba(125,98,72,0.75), rgba(94,70,49,0.95))',
-                        borderBottomLeftRadius: 2,
-                        borderBottomRightRadius: 2,
-                        boxShadow: '0 2px 6px rgba(0,0,0,0.15)',
-                        clipPath: 'polygon(24% 0, 76% 0, 100% 100%, 0 100%)',
-                        zIndex: 3,
-                    }}
-                />
+                    className="absolute left-0 right-0 bottom-0 pointer-events-none"
+                    style={{ height: floorAreaH }}
+                >
+                    <div className="relative w-full h-full pointer-events-auto">
+                        {renderCharacters()}
+                    </div>
+                </div>
 
-                {/* ======= STAFF (positioned on floor area) ======= */}
-                {!locked && roomStaff.map((staff) => {
-                    const sx = staff.x || 50;
-                    const sy = staff.y || 50;
-                    // Convert staff position to isometric floor coordinates
-                    // Staff are drawn "above" the floor diamond
-                    const staffIsoX = (sx / 100) * ht;
-                    const staffIsoY = (sy / 100) * qt;
-                    return (
-                        <div
-                            key={staff.id}
-                            className="absolute transition-all duration-700 ease-in-out cursor-pointer z-20 group"
-                            style={{
-                                left: ht * 0.2 + staffIsoX * 0.6,
-                                bottom: staffIsoY + qt * 0.3,
-                                transform: 'translate(-50%, 0)',
-                            }}
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                onStaffClick?.(staff);
-                            }}
-                        >
-                            <div className="relative">
-                                <div className="absolute bottom-0 left-1/2 -translate-x-1/2 bg-black/10 rounded-full blur-[2px]"
-                                    style={{ width: isZoomed ? 20 : 10, height: isZoomed ? 6 : 3 }} />
-                                {staff.fatigue > 80 && <div className="absolute -top-4 left-1/2 -translate-x-1/2 text-xs animate-bounce">💤</div>}
-                                <div className={`filter drop-shadow-md transform group-hover:scale-110 transition-transform ${isZoomed ? 'text-3xl' : 'text-lg'}`}>
-                                    {staff.avatar.startsWith('http') || staff.avatar.startsWith('data')
-                                        ? <img src={staff.avatar} className={`object-contain rounded-lg ${isZoomed ? 'w-10 h-10' : 'w-5 h-5'}`} />
-                                        : staff.avatar
-                                    }
-                                </div>
-                                <div className={`absolute -bottom-3 left-1/2 -translate-x-1/2 whitespace-nowrap bg-white/90 backdrop-blur-sm rounded-full border border-slate-200 shadow-sm ${isZoomed ? 'text-[9px] px-1.5 py-0.5' : 'text-[6px] px-1 py-px'}`}>
-                                    {staff.isPet && <span className="mr-0.5">🐾</span>}
-                                    {staff.name}
-                                </div>
-                            </div>
-                        </div>
-                    );
-                })}
-
-                {/* ======= LOCK OVERLAY ======= */}
+                {/* ====== LOCK OVERLAY ====== */}
                 {locked && (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center z-30">
+                    <div className="absolute inset-0 flex flex-col items-center justify-center z-40 bg-black/5">
                         <div className="bg-white/70 backdrop-blur-[2px] rounded-xl px-3 py-2 flex flex-col items-center shadow-lg">
                             <div className="text-2xl mb-0.5">🔒</div>
                             <div className="text-[9px] font-bold text-slate-500">{ROOM_UNLOCK_COSTS[room.id] || 150} AP</div>
@@ -585,228 +536,119 @@ const BankDollhouse: React.FC<Props> = ({
                     </div>
                 )}
 
-                {/* Room Name Label */}
-                {!isOtherRoom && (
-                    <div className={`absolute left-1/2 -translate-x-1/2 whitespace-nowrap ${isZoomed ? 'text-[10px]' : 'text-[8px]'} font-bold ${locked ? 'text-slate-400' : 'text-[#8D6E63]'} bg-white/80 backdrop-blur-sm px-2 py-0.5 rounded-full border ${locked ? 'border-slate-200' : 'border-[#E8DCC8]'} shadow-sm z-40`}
-                        style={{ bottom: -8 }}>
-                        {room.name}
-                    </div>
-                )}
+                {/* ====== ROOM NAME LABEL ====== */}
+                <div className={`absolute left-1/2 -translate-x-1/2 whitespace-nowrap ${isActive ? 'text-[10px]' : 'text-[8px]'} font-bold ${locked ? 'text-slate-400' : 'text-[#8D6E63]'} bg-white/80 backdrop-blur-sm px-2 py-0.5 rounded-full border ${locked ? 'border-slate-200' : 'border-[#E8DCC8]'} shadow-sm z-40`}
+                    style={{ top: 4 }}>
+                    {layout.icon} {room.name}
+                </div>
             </div>
         );
     };
 
-    // ==================== MAIN BUILDING LAYOUT ====================
-    // True isometric building: rooms arranged in a diamond grid
-    // 2F: left room at (0,0), right room at (1,0)
-    // 1F: left room at (0,0), right room at (1,0) but lower
-    // The whole building forms a large diamond shape when viewed from above
+    // ==================== SCENE LAYOUT ====================
+    // Rooms are arranged in a grid: 2 columns x N floors
+    // Each room is an independent module with spacing between them.
+    // An optional static building shell wraps the grid for decoration.
 
     const dh = getDollhouse();
-    const floor1Left = dh.rooms.find(r => r.id === 'room-1f-left');
-    const floor1Right = dh.rooms.find(r => r.id === 'room-1f-right');
-    const floor2Left = dh.rooms.find(r => r.id === 'room-2f-left');
-    const floor2Right = dh.rooms.find(r => r.id === 'room-2f-right');
     const zoomedRoom = zoomedRoomId ? getRoom(zoomedRoomId) : null;
 
-    // For the building layout, we position rooms in isometric space
-    // Each floor has two rooms side by side forming a 2x1 row
-    // In isometric, two adjacent rooms form a wider diamond
-
-    // Scaled dimensions for overview
-    const roomW = TILE;
-    const roomTotalH = WALL_H + TILE / 2 + FLOOR_SLAB_H;
-    const floorBlockH = roomTotalH; // height of one floor's rooms
-
-    // Building total size
-    const buildingW = roomW * 2 + 20;
-    const buildingH = floorBlockH * 2 + FLOOR_SEP + 60; // two floors + separator + roof
-
-    // Room positions within the building container (absolute positioning)
-    // We use isometric offsets: right room shifts right by TILE/2 and down by TILE/4
-    const getRoomPosition = (floor: number, position: 'left' | 'right') => {
-        const isLeft = position === 'left';
-        // Horizontal: left room at x=0, right room shifted right
-        const x = isLeft ? TILE * 0.25 : TILE * 0.75;
-        // Vertical: use one shared stack so 2F sits directly on top of 1F slab
-        const floorOffset = floor === 2 ? 0 : floorBlockH + FLOOR_SEP;
-        // In isometric, the right room is offset down by TILE/4
-        const isoOffsetY = isLeft ? 0 : TILE / 8;
-        return { x, y: floorOffset + isoOffsetY + 40 }; // +40 for roof space
-    };
+    // Group rooms by floor (descending: top floors first)
+    const floors = new Map<number, DollhouseRoom[]>();
+    dh.rooms.forEach(r => {
+        const arr = floors.get(r.floor) || [];
+        arr.push(r);
+        floors.set(r.floor, arr);
+    });
+    const floorNumbers = Array.from(floors.keys()).sort((a, b) => b - a); // top floor first
 
     return (
         <div
-            ref={containerRef}
             className="relative w-full overflow-hidden select-none"
             style={{
                 height: '65vh',
                 background: 'linear-gradient(180deg, #FEF7E8 0%, #FDF2DC 40%, #E8DCC8 100%)',
             }}
         >
-            {/* === BUILDING CONTAINER === */}
-            <div
-                className="absolute transition-all duration-500 ease-in-out"
-                style={{
-                    width: buildingW,
-                    height: buildingH,
-                    left: '50%',
-                    top: '50%',
-                    transform: zoomedRoomId ? (() => {
-                        const room = getRoom(zoomedRoomId);
-                        if (!room) return `translate(-50%, -50%)`;
-                        const pos = getRoomPosition(room.floor, room.position);
-                        const cx = pos.x + TILE / 2;
-                        const cy = pos.y + roomTotalH / 2;
-                        const ox = buildingW / 2 - cx;
-                        const oy = buildingH / 2 - cy;
-                        return `translate(-50%, -50%) scale(1.8) translate(${ox * 0.5}px, ${oy * 0.5}px)`;
-                    })() : 'translate(-50%, -50%)',
-                }}
-            >
-                {/* ===== ROOF (isometric diamond shape) ===== */}
-                <div className="absolute z-10" style={{
-                    left: '50%',
-                    top: 10,
-                    transform: 'translateX(-50%)',
+            {/* === BUILDING SHELL (decorative outer frame) === */}
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-0">
+                <div style={{
+                    width: ROOM_W * 2 + ROOM_GAP + 40,
+                    height: floorNumbers.length * (ROOM_H + ROOM_GAP) + 80,
+                    border: '3px solid rgba(141,110,99,0.15)',
+                    borderRadius: 16,
+                    background: 'rgba(255,248,235,0.3)',
                 }}>
-                    {/* Roof is an SVG diamond/triangle shape */}
-                    <svg width={buildingW - 10} height={50} viewBox={`0 0 ${buildingW - 10} 50`} className="drop-shadow-md">
-                        {/* Main roof shape - isometric triangle */}
-                        <polygon
-                            points={`${(buildingW - 10) / 2},2 ${buildingW - 15},35 ${(buildingW - 10) / 2},48 5,35`}
-                            fill="url(#roofGrad)"
-                            stroke="#6D5A3F"
-                            strokeWidth="1.5"
-                        />
-                        {/* Ridge line */}
-                        <line
-                            x1={(buildingW - 10) / 2} y1={2}
-                            x2={(buildingW - 10) / 2} y2={48}
-                            stroke="#5A4935"
-                            strokeWidth="1"
-                            opacity="0.4"
-                        />
-                        <defs>
-                            <linearGradient id="roofGrad" x1="0" y1="0" x2="1" y2="1">
-                                <stop offset="0%" stopColor="#A08060" />
-                                <stop offset="40%" stopColor="#8B7355" />
-                                <stop offset="100%" stopColor="#6D5A3F" />
-                            </linearGradient>
-                        </defs>
-                    </svg>
-                    {/* Shop name */}
-                    <div className="absolute inset-0 flex items-center justify-center">
-                        <span className="text-[9px] font-bold text-[#FFF8E1] drop-shadow-md tracking-wider">
-                            {shopState.shopName}
-                        </span>
+                    {/* Roof decoration */}
+                    <div className="relative w-full flex justify-center" style={{ marginTop: -28 }}>
+                        <svg width={ROOM_W * 2 + ROOM_GAP + 20} height={36} viewBox={`0 0 ${ROOM_W * 2 + ROOM_GAP + 20} 36`}>
+                            <polygon
+                                points={`${(ROOM_W * 2 + ROOM_GAP + 20) / 2},2 ${ROOM_W * 2 + ROOM_GAP + 15},30 5,30`}
+                                fill="url(#shellRoof)"
+                                stroke="#8B7355"
+                                strokeWidth="1.5"
+                                opacity="0.6"
+                            />
+                            <defs>
+                                <linearGradient id="shellRoof" x1="0" y1="0" x2="1" y2="1">
+                                    <stop offset="0%" stopColor="#C4A882" />
+                                    <stop offset="100%" stopColor="#8B7355" />
+                                </linearGradient>
+                            </defs>
+                        </svg>
+                        <div className="absolute inset-0 flex items-center justify-center">
+                            <span className="text-[9px] font-bold text-[#8B7355]/70 tracking-wider mt-1">
+                                {shopState.shopName}
+                            </span>
+                        </div>
                     </div>
                 </div>
+            </div>
 
-                {/* ===== OUTER WALLS (building shell) ===== */}
-                {/* Left exterior wall */}
-                <div className="absolute" style={{
-                    width: 4,
-                    height: buildingH - 90,
-                    left: TILE * 0.25 - 2,
-                    top: 50,
-                    background: 'linear-gradient(180deg, #C4A882, #A08868)',
-                    transform: 'skewY(26.565deg)',
-                    transformOrigin: 'top left',
-                    zIndex: 0,
-                    borderRadius: 1,
-                }} />
-                {/* Right exterior wall */}
-                <div className="absolute" style={{
-                    width: 4,
-                    height: buildingH - 90,
-                    right: TILE * 0.25 - 2,
-                    top: 50,
-                    background: 'linear-gradient(180deg, #B09878, #907858)',
-                    transform: 'skewY(-26.565deg)',
-                    transformOrigin: 'top right',
-                    zIndex: 0,
-                    borderRadius: 1,
-                }} />
+            {/* === ROOM GRID (the actual interactive content) === */}
+            <div
+                className="absolute inset-0 flex items-center justify-center transition-all duration-400 ease-in-out"
+                style={{
+                    transform: zoomedRoomId ? (() => {
+                        const room = getRoom(zoomedRoomId);
+                        if (!room) return 'scale(1)';
+                        // Scale up and center on the zoomed room
+                        return 'scale(1)';
+                    })() : 'scale(1)',
+                }}
+            >
+                <div
+                    className="flex flex-col items-center transition-all duration-400"
+                    style={{ gap: ROOM_GAP }}
+                >
+                    {floorNumbers.map(floorNum => {
+                        const roomsOnFloor = floors.get(floorNum) || [];
+                        // Sort: left before right
+                        roomsOnFloor.sort((a, b) => (a.position === 'left' ? -1 : 1));
 
-                {/* ===== FLOOR SEPARATOR (between 1F and 2F) ===== */}
-                <div className="absolute z-5" style={{
-                    left: '50%',
-                    top: getRoomPosition(2, 'left').y + roomTotalH - FLOOR_SLAB_H,
-                    transform: 'translateX(-50%)',
-                }}>
-                    <div style={{
-                        width: buildingW - 20,
-                        height: FLOOR_SEP,
-                        background: 'linear-gradient(180deg, #A09080, #8B7355)',
-                        boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
-                        borderRadius: 1,
-                    }} />
-                </div>
-
-                {/* ===== ROOMS ===== */}
-                {/* 2F Left */}
-                {floor2Left && (() => {
-                    const pos = getRoomPosition(2, 'left');
-                    return (
-                        <div className="absolute" style={{ left: pos.x, top: pos.y, zIndex: 5 }}>
-                            {renderIsoRoom(floor2Left, zoomedRoomId === floor2Left.id)}
-                        </div>
-                    );
-                })()}
-                {/* 2F Right */}
-                {floor2Right && (() => {
-                    const pos = getRoomPosition(2, 'right');
-                    return (
-                        <div className="absolute" style={{ left: pos.x, top: pos.y, zIndex: 4 }}>
-                            {renderIsoRoom(floor2Right, zoomedRoomId === floor2Right.id)}
-                        </div>
-                    );
-                })()}
-                {/* 1F Left */}
-                {floor1Left && (() => {
-                    const pos = getRoomPosition(1, 'left');
-                    return (
-                        <div className="absolute" style={{ left: pos.x, top: pos.y, zIndex: 5 }}>
-                            {renderIsoRoom(floor1Left, zoomedRoomId === floor1Left.id)}
-                        </div>
-                    );
-                })()}
-                {/* 1F Right */}
-                {floor1Right && (() => {
-                    const pos = getRoomPosition(1, 'right');
-                    return (
-                        <div className="absolute" style={{ left: pos.x, top: pos.y, zIndex: 4 }}>
-                            {renderIsoRoom(floor1Right, zoomedRoomId === floor1Right.id)}
-                        </div>
-                    );
-                })()}
-
-                {/* ===== FOUNDATION ===== */}
-                <div className="absolute z-3" style={{
-                    left: '50%',
-                    bottom: 5,
-                    transform: 'translateX(-50%)',
-                }}>
-                    <div style={{
-                        width: buildingW - 15,
-                        height: 12,
-                        background: 'linear-gradient(180deg, #6D5A3F, #5A4935)',
-                        borderRadius: '0 0 4px 4px',
-                        boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
-                    }} />
-                </div>
-
-                {/* ===== IVY / VINE DECORATION on right side ===== */}
-                <div className="absolute z-30 pointer-events-none" style={{
-                    right: -8,
-                    top: 40,
-                    fontSize: '10px',
-                    lineHeight: '14px',
-                    opacity: 0.7,
-                    writingMode: 'vertical-rl',
-                }}>
-                    🌿🍃🌿🍃🌿🍃
+                        return (
+                            <div
+                                key={`floor-${floorNum}`}
+                                className="flex items-center"
+                                style={{ gap: ROOM_GAP }}
+                            >
+                                {/* Floor label */}
+                                <div className="flex flex-col items-center justify-center mr-1" style={{ width: 16 }}>
+                                    <span className="text-[8px] font-bold text-[#BCAAA4] writing-mode-vertical" style={{
+                                        writingMode: 'vertical-rl',
+                                        textOrientation: 'mixed',
+                                    }}>
+                                        {floorNum === 0 ? '1F' : `${floorNum + 1}F`}
+                                    </span>
+                                </div>
+                                {roomsOnFloor.map(room => (
+                                    <div key={room.id}>
+                                        {renderRoomModule(room, zoomedRoomId !== null)}
+                                    </div>
+                                ))}
+                            </div>
+                        );
+                    })}
                 </div>
             </div>
 
@@ -838,7 +680,7 @@ const BankDollhouse: React.FC<Props> = ({
             {zoomedRoomId && (
                 <button
                     onClick={handleZoomOut}
-                    className="absolute top-3 left-1/2 -translate-x-1/2 z-50 bg-white/90 backdrop-blur-sm px-4 py-2 rounded-full shadow-lg border border-[#E8DCC8] flex items-center gap-2 hover:bg-white active:scale-95 transition-all animate-fade-in"
+                    className="absolute top-3 left-1/2 -translate-x-1/2 z-50 bg-white/90 backdrop-blur-sm px-4 py-2 rounded-full shadow-lg border border-[#E8DCC8] flex items-center gap-2 hover:bg-white active:scale-95 transition-all"
                 >
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4 text-[#8D6E63]">
                         <path strokeLinecap="round" strokeLinejoin="round" d="m2.25 12 8.954-8.955a1.126 1.126 0 0 1 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
@@ -847,9 +689,9 @@ const BankDollhouse: React.FC<Props> = ({
                 </button>
             )}
 
-            {/* === EDIT TOOLBAR (when zoomed) === */}
+            {/* === EDIT TOOLBAR (when a room is focused) === */}
             {zoomedRoomId && zoomedRoom?.isUnlocked && (
-                <div className="absolute bottom-3 left-3 right-3 z-50 animate-slide-up">
+                <div className="absolute bottom-3 left-3 right-3 z-50">
                     <div className="flex items-center gap-1.5 mb-2 justify-center">
                         {[
                             { mode: 'none' as const, icon: '👆', label: '浏览' },
@@ -987,9 +829,9 @@ const BankDollhouse: React.FC<Props> = ({
                 const room = getRoom(showUnlockConfirm);
                 const cost = ROOM_UNLOCK_COSTS[showUnlockConfirm] || 150;
                 return (
-                    <div className="absolute inset-0 z-[60] flex items-center justify-center bg-black/30 backdrop-blur-[2px] animate-fade-in"
+                    <div className="absolute inset-0 z-[60] flex items-center justify-center bg-black/30 backdrop-blur-[2px]"
                          onClick={() => setShowUnlockConfirm(null)}>
-                        <div className="bg-white rounded-2xl shadow-2xl p-5 mx-6 max-w-[280px] w-full animate-pop-in"
+                        <div className="bg-white rounded-2xl shadow-2xl p-5 mx-6 max-w-[280px] w-full"
                              onClick={e => e.stopPropagation()}>
                             <div className="text-center mb-4">
                                 <div className="text-4xl mb-2">🔓</div>
@@ -1029,9 +871,9 @@ const BankDollhouse: React.FC<Props> = ({
             {showLayoutPicker && (() => {
                 const room = getRoom(showLayoutPicker);
                 return (
-                    <div className="absolute inset-0 z-[60] flex items-end justify-center bg-black/30 backdrop-blur-[2px] animate-fade-in"
+                    <div className="absolute inset-0 z-[60] flex items-end justify-center bg-black/30 backdrop-blur-[2px]"
                          onClick={() => setShowLayoutPicker(null)}>
-                        <div className="bg-white rounded-t-2xl shadow-2xl p-4 w-full max-h-[60%] overflow-y-auto animate-slide-up"
+                        <div className="bg-white rounded-t-2xl shadow-2xl p-4 w-full max-h-[60%] overflow-y-auto"
                              onClick={e => e.stopPropagation()}>
                             <div className="text-center mb-3">
                                 <h3 className="font-bold text-base text-[#5D4037]">🏠 更换房型</h3>
