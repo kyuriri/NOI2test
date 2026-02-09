@@ -424,6 +424,9 @@ export interface BankShopState {
         message: string;
         timestamp: number;
         giftAp?: number; // Optional gift from visitor
+        roomId?: string;
+        x?: number;
+        y?: number;
     };
     guestbook?: BankGuestbookItem[];
     dollhouse?: DollhouseState;

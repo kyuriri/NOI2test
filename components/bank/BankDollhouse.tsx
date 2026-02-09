@@ -37,19 +37,22 @@ interface Props {
     updateState: (s: BankShopState) => Promise<void>;
     onStaffClick?: (staff: ShopStaff) => void;
     onOpenGuestbook: () => void;
-    onRefreshVisitor?: () => void;
-    isRefreshingVisitor?: boolean;
 }
 
 const BankDollhouse: React.FC<Props> = ({
-    shopState, characters, updateState, onStaffClick, onOpenGuestbook, onRefreshVisitor, isRefreshingVisitor = false
+    shopState, characters, updateState, onStaffClick, onOpenGuestbook
 }) => {
     const { addToast } = useOS();
     const [showUnlockConfirm, setShowUnlockConfirm] = useState<string | null>(null);
     const [showRoomMap, setShowRoomMap] = useState(false);
     const [showDecorPanel, setShowDecorPanel] = useState(false);
     const [decorTab, setDecorTab] = useState<DecorTab>('furniture');
-    const [showFullscreen, setShowFullscreen] = useState(false);
+    const [draggingActorId, setDraggingActorId] = useState<string | null>(null);
+    const [actorPositions, setActorPositions] = useState<Record<string, { x: number; y: number }>>({});
+
+    const longPressTimerRef = useRef<number | null>(null);
+    const dragStateRef = useRef<{ actorId: string; roomId: string; isVisitor: boolean } | null>(null);
+    const suppressActorClickRef = useRef(false);
 
     const [customAssets, setCustomAssets] = useState<CustomFurnitureAsset[]>([]);
     const [showAssetModal, setShowAssetModal] = useState(false);
@@ -59,6 +62,11 @@ const BankDollhouse: React.FC<Props> = ({
 
     const getDollhouse = (): DollhouseState => shopState.dollhouse || INITIAL_DOLLHOUSE;
     const dh = getDollhouse();
+
+    const clampActorPos = (x: number, y: number) => ({
+        x: Math.max(8, Math.min(92, x)),
+        y: Math.max(56, Math.min(92, y)),
+    });
 
     const saveDollhouse = async (newDH: DollhouseState) => {
         await updateState({ ...shopState, dollhouse: newDH });
@@ -125,6 +133,40 @@ const BankDollhouse: React.FC<Props> = ({
     const activeRoom = orderedRooms.find(r => r.id === activeRoomId) || orderedRooms[0];
     const activeRoomIndex = orderedRooms.findIndex(r => r.id === activeRoom.id);
 
+    useEffect(() => {
+        const next: Record<string, { x: number; y: number }> = {};
+        shopState.staff.forEach(staff => {
+            next[staff.id] = clampActorPos(staff.x ?? 50, staff.y ?? 74);
+        });
+        if (shopState.activeVisitor?.charId) {
+            next[shopState.activeVisitor.charId] = clampActorPos(shopState.activeVisitor.x ?? 55, shopState.activeVisitor.y ?? 76);
+        }
+        setActorPositions(next);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [shopState.staff, shopState.activeVisitor?.charId, shopState.activeVisitor?.x, shopState.activeVisitor?.y]);
+
+    useEffect(() => {
+        const timer = window.setInterval(() => {
+            if (dragStateRef.current) return;
+            setActorPositions(prev => {
+                const updated: Record<string, { x: number; y: number }> = { ...prev };
+                Object.entries(prev).forEach(([id, pos]) => {
+                    if (Math.random() > 0.55) return;
+                    const dx = (Math.random() - 0.5) * 5.5;
+                    const dy = (Math.random() - 0.5) * 3.2;
+                    updated[id] = clampActorPos(pos.x + dx, pos.y + dy);
+                });
+                return updated;
+            });
+        }, 2200);
+
+        return () => {
+            window.clearInterval(timer);
+            cancelLongPress();
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     const getLayout = (layoutId: string): RoomLayout | undefined => ROOM_LAYOUTS.find(l => l.id === layoutId);
 
     const handleUnlockRoom = async (roomId: string) => {
@@ -167,35 +209,58 @@ const BankDollhouse: React.FC<Props> = ({
         addToast('房间名已更新', 'success');
     };
 
-    const handleFloorClick = (roomId: string, e: React.MouseEvent<HTMLDivElement>) => {
-        const room = dh.rooms.find(r => r.id === roomId);
-        if (!room || !room.isUnlocked) return;
-
-        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-        const xPct = Math.max(5, Math.min(95, ((e.clientX - rect.left) / rect.width) * 100));
-        const yPct = Math.max(10, Math.min(90, ((e.clientY - rect.top) / rect.height) * 100));
-
-        const staffInRoom = shopState.staff.filter(s => {
-            const target = dh.rooms.find(rm => rm.staffIds.includes(s.id));
-            return target?.id === roomId;
-        });
-        const staffToMove = staffInRoom[0] || shopState.staff[0];
-        if (!staffToMove) return;
-
-        const needsRoomAssign = !dh.rooms.some(r => r.staffIds.includes(staffToMove.id) && r.id === roomId);
-        const newStaff = shopState.staff.map(s => s.id === staffToMove.id ? { ...s, x: xPct, y: yPct } : s);
-        let newRooms = dh.rooms;
-
-        if (needsRoomAssign) {
-            newRooms = dh.rooms.map(r => ({
-                ...r,
-                staffIds: r.id === roomId
-                    ? [...r.staffIds.filter(id => id !== staffToMove.id), staffToMove.id]
-                    : r.staffIds.filter(id => id !== staffToMove.id)
-            }));
+    const persistActorPosition = async (actorId: string, x: number, y: number, isVisitor: boolean) => {
+        const next = clampActorPos(x, y);
+        if (isVisitor) {
+            if (!shopState.activeVisitor || shopState.activeVisitor.charId !== actorId) return;
+            await updateState({
+                ...shopState,
+                activeVisitor: { ...shopState.activeVisitor, x: next.x, y: next.y }
+            });
+            return;
         }
 
-        updateState({ ...shopState, staff: newStaff, dollhouse: { ...dh, rooms: newRooms } });
+        const newStaff = shopState.staff.map(s => s.id === actorId ? { ...s, x: next.x, y: next.y } : s);
+        await updateState({ ...shopState, staff: newStaff });
+    };
+
+    const cancelLongPress = () => {
+        if (longPressTimerRef.current !== null) {
+            window.clearTimeout(longPressTimerRef.current);
+            longPressTimerRef.current = null;
+        }
+    };
+
+    const handleActorPressStart = (actorId: string, roomId: string, isVisitor: boolean) => {
+        cancelLongPress();
+        longPressTimerRef.current = window.setTimeout(() => {
+            dragStateRef.current = { actorId, roomId, isVisitor };
+            setDraggingActorId(actorId);
+            suppressActorClickRef.current = true;
+        }, 320);
+    };
+
+    const handleRoomPointerMove = (roomId: string, e: React.PointerEvent<HTMLDivElement>) => {
+        const drag = dragStateRef.current;
+        if (!drag || drag.roomId !== roomId) return;
+        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+        const xPct = ((e.clientX - rect.left) / rect.width) * 100;
+        const yPct = ((e.clientY - rect.top) / rect.height) * 100;
+        const next = clampActorPos(xPct, yPct);
+        setActorPositions(prev => ({ ...prev, [drag.actorId]: next }));
+    };
+
+    const handleRoomPointerUp = async () => {
+        cancelLongPress();
+        const drag = dragStateRef.current;
+        if (!drag) return;
+        const pos = actorPositions[drag.actorId];
+        if (pos) {
+            await persistActorPosition(drag.actorId, pos.x, pos.y, drag.isVisitor);
+        }
+        dragStateRef.current = null;
+        setDraggingActorId(null);
+        window.setTimeout(() => { suppressActorClickRef.current = false; }, 0);
     };
 
     const handleSetWallpaper = async (roomId: string, style: string) => {
@@ -320,7 +385,6 @@ const BankDollhouse: React.FC<Props> = ({
 
     const renderRoom = (room: DollhouseRoom, immersive = false) => {
         const locked = !room.isUnlocked;
-        const layout = getLayout(room.layoutId) || ROOM_LAYOUTS[0];
         const wallBg = room.wallpaperLeft || room.wallpaperRight || 'linear-gradient(180deg, #FFF5E9, #FDE5D8)';
         const floorBg = room.floorStyle || 'linear-gradient(135deg, #D6B48C, #C69767)';
 
@@ -330,12 +394,22 @@ const BankDollhouse: React.FC<Props> = ({
             return room.id === MAIN_ROOM_ID;
         });
 
+        const visitor = shopState.activeVisitor && shopState.activeVisitor.roomId === room.id
+            ? characters.find(c => c.id === shopState.activeVisitor?.charId)
+            : null;
+
         const wallStickers = room.stickers.filter(s => s.surface === 'leftWall' || s.surface === 'rightWall');
         const floorStickers = room.stickers.filter(s => s.surface === 'floor');
 
         return (
-            <div className={`w-full rounded-[26px] overflow-hidden border-4 border-[#FFE7D2] shadow-[0_14px_40px_rgba(214,151,103,0.35)] bg-[#FFF9F4] ${immersive ? 'max-w-[560px] mx-auto' : ''}`}>
-                <div className="relative w-full" style={{ aspectRatio: '3 / 4' }}>
+            <div className={`w-full h-full rounded-[26px] overflow-hidden border-4 border-[#FFE7D2] shadow-[0_14px_40px_rgba(214,151,103,0.35)] bg-[#FFF9F4] ${immersive ? 'max-w-[560px] mx-auto' : ''}`}>
+                <div
+                    className="relative w-full h-full min-h-[420px] touch-none"
+                    onPointerMove={(e) => handleRoomPointerMove(room.id, e)}
+                    onPointerUp={handleRoomPointerUp}
+                    onPointerCancel={handleRoomPointerUp}
+                    onPointerLeave={handleRoomPointerUp}
+                >
                     <div className="absolute left-0 right-0 top-0" style={{ height: `${WALL_H_RATIO * 100}%`, background: wallBg }}>
                         <div className="absolute inset-0 opacity-20" style={{ backgroundImage: 'radial-gradient(circle at 2px 2px, #fff 1.5px, transparent 2px)', backgroundSize: '20px 20px' }} />
                         {!locked && wallStickers.map(sticker => (
@@ -353,12 +427,8 @@ const BankDollhouse: React.FC<Props> = ({
                     <div
                         className="absolute left-0 right-0 bottom-0"
                         style={{ height: `${FLOOR_H_RATIO * 100}%`, background: floorBg, borderTop: '3px solid rgba(156,104,64,0.22)' }}
-                        onClick={(e) => !locked && handleFloorClick(room.id, e)}
                     >
                         <div className="absolute inset-0 opacity-10" style={{ backgroundImage: 'linear-gradient(0deg, rgba(0,0,0,0.2) 1px, transparent 1px),linear-gradient(90deg, rgba(0,0,0,0.2) 1px, transparent 1px)', backgroundSize: '22px 22px' }} />
-                        {!locked && layout.hasCounter && (
-                            <div className="absolute left-[11%] top-[16%] h-3 w-[34%] rounded-sm border border-[#5B3C2A]" style={{ background: 'linear-gradient(180deg, #7A5238, #5A3A29)' }} />
-                        )}
 
                         {!locked && floorStickers.map(sticker => (
                             <div
@@ -372,17 +442,40 @@ const BankDollhouse: React.FC<Props> = ({
                         ))}
                     </div>
 
-                    {!locked && roomStaff.map(staff => (
-                        <div
-                            key={staff.id}
-                            className="absolute cursor-pointer"
-                            style={{ left: `${staff.x || 50}%`, top: `${staff.y || 72}%`, transform: 'translate(-50%, -100%)', zIndex: 30 }}
-                            onClick={(e) => { e.stopPropagation(); onStaffClick?.(staff); }}
-                        >
-                            <div className={`${immersive ? 'text-4xl' : 'text-3xl'} drop-shadow-md`}>{staff.avatar}</div>
-                            <div className="mt-1 px-2 py-0.5 rounded-full bg-white/90 border border-[#F2D5BE] text-[10px] font-bold text-[#8A5A3D]">{staff.name}</div>
-                        </div>
-                    ))}
+                    {!locked && roomStaff.map(staff => {
+                        const pos = actorPositions[staff.id] || clampActorPos(staff.x || 50, staff.y || 72);
+                        return (
+                            <div
+                                key={staff.id}
+                                className={`absolute ${draggingActorId === staff.id ? 'cursor-grabbing' : 'cursor-pointer'} select-none transition-transform duration-700`}
+                                style={{ left: `${pos.x}%`, top: `${pos.y}%`, transform: 'translate(-50%, -100%)', zIndex: 30 }}
+                                onPointerDown={(e) => { e.stopPropagation(); handleActorPressStart(staff.id, room.id, false); }}
+                                onPointerUp={(e) => {
+                                    e.stopPropagation();
+                                    cancelLongPress();
+                                    if (!suppressActorClickRef.current) onStaffClick?.(staff);
+                                }}
+                            >
+                                <div className={`${immersive ? 'text-4xl' : 'text-3xl'} drop-shadow-md`}>{staff.avatar}</div>
+                                <div className="mt-1 px-2 py-0.5 rounded-full bg-white/90 border border-[#F2D5BE] text-[10px] font-bold text-[#8A5A3D]">{staff.name}</div>
+                            </div>
+                        );
+                    })}
+
+                    {!locked && visitor && shopState.activeVisitor && (() => {
+                        const visitorPos = actorPositions[visitor.id] || clampActorPos(shopState.activeVisitor.x ?? 55, shopState.activeVisitor.y ?? 76);
+                        return (
+                            <div
+                                className={`absolute ${draggingActorId === visitor.id ? 'cursor-grabbing' : 'cursor-grab'} select-none transition-transform duration-700`}
+                                style={{ left: `${visitorPos.x}%`, top: `${visitorPos.y}%`, transform: 'translate(-50%, -100%)', zIndex: 35 }}
+                                onPointerDown={(e) => { e.stopPropagation(); handleActorPressStart(visitor.id, room.id, true); }}
+                                onPointerUp={(e) => { e.stopPropagation(); cancelLongPress(); }}
+                            >
+                                <img src={visitor.sprites?.chibi || visitor.avatar} className="w-10 h-10 rounded-xl object-cover border-2 border-white shadow-md" />
+                                <div className="mt-1 px-2 py-0.5 rounded-full bg-white/95 border border-[#D9C1AE] text-[10px] font-bold text-[#8A5A3D]">{visitor.name}</div>
+                            </div>
+                        );
+                    })()}
 
                     {locked && (
                         <button
@@ -395,16 +488,6 @@ const BankDollhouse: React.FC<Props> = ({
                             </div>
                         </button>
                     )}
-
-                    <button
-                        onClick={() => setShowFullscreen(true)}
-                        className="absolute top-2 right-2 z-50 w-9 h-9 rounded-full bg-white/90 border border-[#EFD5BF] shadow flex items-center justify-center"
-                        aria-label="全屏房间"
-                    >
-                        <svg viewBox="0 0 24 24" className="w-4 h-4 text-[#8A5A3D]" fill="none" stroke="currentColor" strokeWidth="2">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M8 3H4v4M16 3h4v4M8 21H4v-4M20 21h-4v-4" />
-                        </svg>
-                    </button>
                 </div>
             </div>
         );
@@ -415,7 +498,7 @@ const BankDollhouse: React.FC<Props> = ({
     const visitorChar = characters.find(c => c.id === shopState.activeVisitor?.charId);
 
     return (
-        <div className="relative w-full px-3 pt-3 pb-4 rounded-2xl" style={{ minHeight: 'calc(100vh - 180px)', background: 'linear-gradient(180deg, #FFF5ED 0%, #FFEEDB 100%)' }}>
+        <div className="relative w-full h-full px-3 pt-2 pb-3 rounded-2xl flex flex-col" style={{ background: 'linear-gradient(180deg, #FFF5ED 0%, #FFEEDB 100%)' }}>
             <div className="flex items-center justify-between mb-2">
                 {renderArrowButton('left', goPrevRoom)}
                 <div className="text-center">
@@ -440,38 +523,21 @@ const BankDollhouse: React.FC<Props> = ({
                 </button>
             </div>
 
-            <div className="mb-3 rounded-2xl border border-[#F4D8BE] bg-gradient-to-r from-[#FFE8CE] to-[#FFDDBA] p-3 shadow-md">
-                <div className="flex items-center justify-between gap-2">
-                    <button
-                        onClick={onOpenGuestbook}
-                        className="flex-1 rounded-xl bg-gradient-to-r from-[#8D6E63] to-[#6D4C41] text-white px-3 py-3 text-sm font-black shadow"
-                    >
-                        📖 打开情报志
-                    </button>
-                    <button
-                        onClick={() => onRefreshVisitor?.()}
-                        disabled={!onRefreshVisitor || isRefreshingVisitor}
-                        className={`rounded-xl px-3 py-3 text-xs font-bold shadow ${
-                            isRefreshingVisitor
-                                ? 'bg-[#EFEBE9] text-[#BCAAA4]'
-                                : 'bg-gradient-to-r from-[#42A5F5] to-[#1E88E5] text-white'
-                        }`}
-                    >
-                        {isRefreshingVisitor ? '刷新中...' : '刷新访客'}
-                    </button>
-                </div>
-                <div className="mt-2 flex items-center gap-2 text-xs text-[#7A5238]">
-                    <span className="font-bold">当前访客：</span>
-                    {visitorChar ? (
-                        <>
-                            <img src={visitorChar.sprites?.chibi || visitorChar.avatar} className="w-7 h-7 rounded-lg object-cover border border-white/70" />
-                            <span className="font-bold">{visitorChar.name}</span>
-                            <span className="text-[11px] text-[#9D745A] truncate">{shopState.activeVisitor?.message || '来店里逛逛~'}</span>
-                        </>
-                    ) : (
-                        <span className="text-[#9D745A]">暂无访客，点“刷新访客”邀请一个吧</span>
-                    )}
-                </div>
+            <div className="mb-2 rounded-2xl border border-[#E3C8B0] bg-gradient-to-r from-[#E3C4A9] to-[#C89D7B] p-2.5 shadow-md">
+                <button
+                    onClick={onOpenGuestbook}
+                    className="w-full rounded-xl bg-gradient-to-r from-[#7B4F37] to-[#5C3829] text-white px-3 py-2.5 text-sm font-black shadow flex items-center justify-center gap-2"
+                >
+                    <span>📖</span>
+                    <span>翻开情报志</span>
+                </button>
+                {visitorChar && (
+                    <div className="mt-2 flex items-center gap-2 text-xs text-[#5C3829] bg-white/55 rounded-xl px-2 py-1.5">
+                        <img src={visitorChar.sprites?.chibi || visitorChar.avatar} className="w-7 h-7 rounded-lg object-cover border border-white/70" />
+                        <span className="font-bold shrink-0">{visitorChar.name}</span>
+                        <span className="text-[11px] text-[#7A5238] truncate">{shopState.activeVisitor?.message || '来店里逛逛~'}</span>
+                    </div>
+                )}
             </div>
 
             {showRoomMap && (
@@ -491,7 +557,9 @@ const BankDollhouse: React.FC<Props> = ({
                 </div>
             )}
 
-            {renderRoom(activeRoom)}
+            <div className="flex-1 min-h-0">
+                {renderRoom(activeRoom)}
+            </div>
 
             {showDecorPanel && (
                 <div className="absolute inset-0 z-[80] bg-black/35 flex items-end" onClick={() => setShowDecorPanel(false)}>
@@ -608,17 +676,6 @@ const BankDollhouse: React.FC<Props> = ({
                             <button onClick={handleAddCustomAsset} className="flex-1 py-2 rounded-lg bg-[#FF8E6B] text-white text-xs font-bold">保存</button>
                         </div>
                         <input ref={fileInputRef} type="file" accept="image/*" onChange={handleUploadCustomAsset} className="hidden" />
-                    </div>
-                </div>
-            )}
-
-            {showFullscreen && (
-                <div className="fixed inset-0 z-[100] bg-[#2B1B13] p-3 overflow-y-auto">
-                    <div className="max-w-[680px] mx-auto">
-                        <div className="mb-3 flex justify-end">
-                            <button onClick={() => setShowFullscreen(false)} className="px-3 py-1.5 rounded-lg bg-white/90 text-[#7A5238] text-xs font-bold">退出全屏</button>
-                        </div>
-                        {renderRoom(activeRoom, true)}
                     </div>
                 </div>
             )}
