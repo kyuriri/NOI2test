@@ -156,7 +156,7 @@ export const INITIAL_DOLLHOUSE: DollhouseState = {
     rooms: [
         {
             id: 'room-1f-left',
-            name: '大厅',
+            name: '咖啡店',
             floor: 0,
             position: 'left',
             isUnlocked: true,
