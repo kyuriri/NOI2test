@@ -200,6 +200,62 @@ const BlackboardRenderer: React.FC<{ text: string, isTyping?: boolean, katexRend
         );
     };
 
+
+
+    const isTableRow = (line: string) => {
+        const trimmed = line.trim();
+        return trimmed.includes('|') && /^\|?.+\|.+\|?$/.test(trimmed);
+    };
+
+    const isTableSeparator = (line: string) => {
+        const cleaned = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+        const segments = cleaned.split('|').map(seg => seg.trim());
+        if (segments.length < 2) return false;
+        return segments.every(seg => /^:?-{3,}:?$/.test(seg));
+    };
+
+    const splitTableCells = (line: string) => line
+        .trim()
+        .replace(/^\|/, '')
+        .replace(/\|$/, '')
+        .split('|')
+        .map(cell => cell.trim());
+
+    const renderTable = (rows: string[], index: number) => {
+        if (rows.length < 2) return renderBlock(rows[0], index, storedMath, storedCode);
+
+        const header = splitTableCells(rows[0]);
+        const hasSeparator = rows[1] ? isTableSeparator(rows[1]) : false;
+        const bodyRows = (hasSeparator ? rows.slice(2) : rows.slice(1)).map(splitTableCells);
+
+        return (
+            <div key={`table-${index}`} className="my-4 overflow-x-auto rounded-xl border border-white/10 bg-black/25">
+                <table className="w-full min-w-[360px] border-collapse text-sm text-left">
+                    <thead className="bg-white/10">
+                        <tr>
+                            {header.map((cell, i) => (
+                                <th key={i} className="px-3 py-2 text-emerald-200 font-bold border-b border-white/10">
+                                    {parseInline(cell)}
+                                </th>
+                            ))}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {bodyRows.map((row, rowIndex) => (
+                            <tr key={rowIndex} className="odd:bg-white/0 even:bg-white/[0.03]">
+                                {header.map((_, colIndex) => (
+                                    <td key={colIndex} className="px-3 py-2 text-white/90 border-t border-white/5 align-top leading-relaxed">
+                                        {parseInline(row[colIndex] || '')}
+                                    </td>
+                                ))}
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+        );
+    };
+
     // --- Pre-processing Logic ---
     // Protect blocks (Math $$...$$ and Code ```...```) from being split by newlines
     const storedMath: string[] = [];
@@ -221,8 +277,25 @@ const BlackboardRenderer: React.FC<{ text: string, isTyping?: boolean, katexRend
         return `\n__BLOCK_MATH_${storedMath.length - 1}__\n`;
     });
 
-    // 3. Split by newlines
+    // 3. Split by newlines + merge markdown table blocks
     const blocks = processedText.split('\n');
+    const renderedBlocks: React.ReactNode[] = [];
+
+    for (let i = 0; i < blocks.length; i++) {
+        const line = blocks[i];
+        if (isTableRow(line) && i + 1 < blocks.length && isTableSeparator(blocks[i + 1])) {
+            const tableLines = [line, blocks[i + 1]];
+            let j = i + 2;
+            while (j < blocks.length && isTableRow(blocks[j])) {
+                tableLines.push(blocks[j]);
+                j += 1;
+            }
+            renderedBlocks.push(renderTable(tableLines, i));
+            i = j - 1;
+            continue;
+        }
+        renderedBlocks.push(renderBlock(line, i, storedMath, storedCode));
+    }
     
     return (
         <div className="space-y-1">
@@ -233,7 +306,7 @@ const BlackboardRenderer: React.FC<{ text: string, isTyping?: boolean, katexRend
                 .katex-html { color: white !important; }
             `}</style>
             
-            {blocks.map((b, i) => renderBlock(b, i, storedMath, storedCode))}
+            {renderedBlocks}
             {isTyping && (
                 <div className="mt-4 animate-pulse flex items-center gap-2 text-emerald-500">
                     <span className="w-2 h-5 bg-emerald-500"></span>
