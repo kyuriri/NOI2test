@@ -372,6 +372,14 @@ ${previousGuestbook}
                 // Update State: 
                 // 1. Add new entries to guestbook (prepend)
                 // 2. Set Active Visitor to the Char who posted
+                const unlockedRooms = (state.shop.dollhouse?.rooms || []).filter(r => r.isUnlocked);
+                const fallbackRoom = state.shop.dollhouse?.rooms?.[0];
+                const spawnRoom = unlockedRooms.length > 0
+                    ? unlockedRooms[Math.floor(Math.random() * unlockedRooms.length)]
+                    : fallbackRoom;
+                const spawnX = 18 + Math.random() * 64;
+                const spawnY = 64 + Math.random() * 24;
+
                 const newState = {
                     ...state,
                     shop: {
@@ -381,7 +389,10 @@ ${previousGuestbook}
                         activeVisitor: {
                             charId: randomChar.id,
                             message: newEntries.find(e => e.isChar)?.content || "来逛逛~",
-                            timestamp: Date.now()
+                            timestamp: Date.now(),
+                            roomId: spawnRoom?.id,
+                            x: spawnX,
+                            y: spawnY,
                         }
                     }
                 };
@@ -531,8 +542,6 @@ ${previousGuestbook}
                         }}
                         onStaffClick={handleOpenStaffEdit}
                         onOpenGuestbook={() => setShowGuestbook(true)}
-                        onRefreshVisitor={handleRefreshGuestbook}
-                        isRefreshingVisitor={isRefreshingGuestbook}
                     />
                 )}
 
