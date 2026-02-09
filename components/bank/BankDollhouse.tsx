@@ -17,8 +17,8 @@ const ROOM_UNLOCK_COSTS: Record<string, number> = {
 };
 
 const MAIN_ROOM_ID = 'room-1f-left';
-const FLOOR_H_RATIO = 0.3;
-const WALL_H_RATIO = 0.7;
+const FLOOR_H_RATIO = 0.24;
+const WALL_H_RATIO = 0.76;
 const CUSTOM_FURNITURE_ASSET_KEY = 'bank_custom_furniture_assets_v1';
 
 type DecorTab = 'layout' | 'rename' | 'wallpaper' | 'furniture' | 'floor';
@@ -44,7 +44,6 @@ const BankDollhouse: React.FC<Props> = ({
 }) => {
     const { addToast } = useOS();
     const [showUnlockConfirm, setShowUnlockConfirm] = useState<string | null>(null);
-    const [showRoomMap, setShowRoomMap] = useState(false);
     const [showDecorPanel, setShowDecorPanel] = useState(false);
     const [decorTab, setDecorTab] = useState<DecorTab>('furniture');
     const [draggingActorId, setDraggingActorId] = useState<string | null>(null);
@@ -402,7 +401,7 @@ const BankDollhouse: React.FC<Props> = ({
         const floorStickers = room.stickers.filter(s => s.surface === 'floor');
 
         return (
-            <div className={`w-full h-full rounded-[26px] overflow-hidden border-4 border-[#FFE7D2] shadow-[0_14px_40px_rgba(214,151,103,0.35)] bg-[#FFF9F4] ${immersive ? 'max-w-[560px] mx-auto' : ''}`}>
+            <div className={`w-full h-full rounded-[18px] overflow-hidden border border-[#E8DAC6] shadow-[0_6px_14px_rgba(131,96,66,0.14)] bg-[#F9F3E6] ${immersive ? 'max-w-[560px] mx-auto' : ''}`}>
                 <div
                     className="relative w-full h-full min-h-[420px] touch-none"
                     onPointerMove={(e) => handleRoomPointerMove(room.id, e)}
@@ -495,10 +494,8 @@ const BankDollhouse: React.FC<Props> = ({
 
     const builtinFurniture = STICKER_LIBRARY.map(s => ({ id: s.id, name: s.name, url: s.url, category: s.category }));
 
-    const visitorChar = characters.find(c => c.id === shopState.activeVisitor?.charId);
-
     return (
-        <div className="relative w-full h-full px-3 pt-2 pb-3 rounded-2xl flex flex-col" style={{ background: 'linear-gradient(180deg, #FFF5ED 0%, #FFEEDB 100%)' }}>
+        <div className="relative w-full h-full pt-2 pb-3 rounded-2xl flex flex-col" style={{ background: 'linear-gradient(180deg, #F8F0E0 0%, #F2E9D6 100%)' }}>
             <div className="flex items-center justify-between mb-2">
                 {renderArrowButton('left', goPrevRoom)}
                 <div className="text-center">
@@ -508,56 +505,24 @@ const BankDollhouse: React.FC<Props> = ({
                 {renderArrowButton('right', goNextRoom)}
             </div>
 
-            <div className="mb-2 flex justify-center gap-2">
-                <button
-                    onClick={() => setShowRoomMap(v => !v)}
-                    className="px-3 py-1.5 rounded-full bg-[#7A5238] text-white text-xs font-bold shadow"
-                >
-                    {showRoomMap ? '收起房间地图' : '展开房间地图'}
-                </button>
+            <div className="absolute right-3 top-[72px] z-20 flex flex-col gap-2">
                 <button
                     onClick={() => { setShowDecorPanel(true); setDecorTab('furniture'); }}
-                    className="px-3 py-1.5 rounded-full bg-gradient-to-r from-[#FF9A75] to-[#FF7D6A] text-white text-xs font-bold shadow"
+                    className="w-11 h-11 rounded-2xl bg-gradient-to-r from-[#FF9A75] to-[#FF7D6A] text-white text-lg shadow-md"
+                    aria-label="装修"
                 >
-                    🛠️ 装修
+                    🛠️
                 </button>
-            </div>
-
-            <div className="mb-2 rounded-2xl border border-[#E3C8B0] bg-gradient-to-r from-[#E3C4A9] to-[#C89D7B] p-2.5 shadow-md">
                 <button
                     onClick={onOpenGuestbook}
-                    className="w-full rounded-xl bg-gradient-to-r from-[#7B4F37] to-[#5C3829] text-white px-3 py-2.5 text-sm font-black shadow flex items-center justify-center gap-2"
+                    className="w-11 h-11 rounded-2xl bg-white/85 border border-[#EAD3BF] text-[#7A5238] text-lg shadow-sm"
+                    aria-label="翻开情报志"
                 >
-                    <span>📖</span>
-                    <span>翻开情报志</span>
+                    📖
                 </button>
-                {visitorChar && (
-                    <div className="mt-2 flex items-center gap-2 text-xs text-[#5C3829] bg-white/55 rounded-xl px-2 py-1.5">
-                        <img src={visitorChar.sprites?.chibi || visitorChar.avatar} className="w-7 h-7 rounded-lg object-cover border border-white/70" />
-                        <span className="font-bold shrink-0">{visitorChar.name}</span>
-                        <span className="text-[11px] text-[#7A5238] truncate">{shopState.activeVisitor?.message || '来店里逛逛~'}</span>
-                    </div>
-                )}
             </div>
 
-            {showRoomMap && (
-                <div className="mb-3 p-2 rounded-2xl bg-white/75 border border-[#F7DCC3] shadow-sm">
-                    <div className="grid grid-cols-2 gap-2">
-                        {orderedRooms.map(room => (
-                            <button
-                                key={room.id}
-                                onClick={() => setActiveRoomId(room.id)}
-                                className={`p-2 rounded-xl text-left border ${activeRoom.id === room.id ? 'bg-[#FFF1E4] border-[#F0B887]' : 'bg-white border-[#F3E1CF]'}`}
-                            >
-                                <div className="text-[11px] font-bold text-[#8A5A3D] truncate">{room.name}</div>
-                                <div className="text-[10px] text-[#B1896D]">{room.isUnlocked ? '已解锁' : `🔒 ${ROOM_UNLOCK_COSTS[room.id] || 150} AP`}</div>
-                            </button>
-                        ))}
-                    </div>
-                </div>
-            )}
-
-            <div className="flex-1 min-h-0">
+            <div className="flex-1 min-h-0 px-0.5">
                 {renderRoom(activeRoom)}
             </div>
 
