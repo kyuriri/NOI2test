@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
     BankShopState, DollhouseState, DollhouseRoom, DollhouseSticker,
     ShopStaff, CharacterProfile, UserProfile, APIConfig, RoomLayout
@@ -8,7 +8,6 @@ import {
 } from './BankGameConstants';
 import { useOS } from '../../context/OSContext';
 
-// ==================== CONSTANTS ====================
 const ROOM_UNLOCK_COSTS: Record<string, number> = {
     'room-1f-left': 0,
     'room-1f-right': 120,
@@ -17,11 +16,18 @@ const ROOM_UNLOCK_COSTS: Record<string, number> = {
 };
 
 const MAIN_ROOM_ID = 'room-1f-left';
-const FLOOR_H_RATIO = 0.3;   // bottom 30% is walkable floor
-const WALL_H_RATIO = 0.7;    // top 70% is wall backdrop
-const ROOM_GAP = 6;
+const FLOOR_H_RATIO = 0.3;
+const WALL_H_RATIO = 0.7;
+const CUSTOM_FURNITURE_KEY = 'bank_custom_furniture_assets_v1';
 
-// ==================== PROPS ====================
+type DecorTab = 'layout' | 'rename' | 'wallpaper' | 'furniture' | 'floor';
+
+interface CustomFurnitureAsset {
+    id: string;
+    name: string;
+    url: string;
+}
+
 interface Props {
     shopState: BankShopState;
     characters: CharacterProfile[];
@@ -32,60 +38,81 @@ interface Props {
     onOpenGuestbook: () => void;
 }
 
-// ==================== COMPONENT ====================
 const BankDollhouse: React.FC<Props> = ({
-    shopState, characters, userProfile, apiConfig, updateState,
-    onStaffClick, onOpenGuestbook
+    shopState, updateState, onStaffClick, onOpenGuestbook
 }) => {
     const { addToast } = useOS();
-    const dollhouse = shopState.dollhouse || INITIAL_DOLLHOUSE;
-
-    // --- State ---
-    const [zoomedRoomId, setZoomedRoomId] = useState<string | null>(null);
-    const [isAnimating, setIsAnimating] = useState(false);
-    const [editMode, setEditMode] = useState<'none' | 'sticker' | 'wallpaper' | 'floor'>('none');
-    const [editSurface, setEditSurface] = useState<'floor' | 'leftWall' | 'rightWall'>('floor');
-    const [draggingSticker, setDraggingSticker] = useState<DollhouseSticker | null>(null);
-    const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
     const [showUnlockConfirm, setShowUnlockConfirm] = useState<string | null>(null);
-    const [showLayoutPicker, setShowLayoutPicker] = useState<string | null>(null);
-    const [stickerTab, setStickerTab] = useState<string>('decor');
+    const [showRoomMap, setShowRoomMap] = useState(false);
+    const [showDecorPanel, setShowDecorPanel] = useState(false);
+    const [decorTab, setDecorTab] = useState<DecorTab>('furniture');
+    const [showFullscreen, setShowFullscreen] = useState(false);
 
-    // --- Helpers ---
+    const [customAssets, setCustomAssets] = useState<CustomFurnitureAsset[]>([]);
+    const [showAssetModal, setShowAssetModal] = useState(false);
+    const [assetName, setAssetName] = useState('');
+    const [assetUrl, setAssetUrl] = useState('');
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
     const getDollhouse = (): DollhouseState => shopState.dollhouse || INITIAL_DOLLHOUSE;
+    const dh = getDollhouse();
 
     const saveDollhouse = async (newDH: DollhouseState) => {
         await updateState({ ...shopState, dollhouse: newDH });
     };
 
-    const getRoom = (id: string): DollhouseRoom | undefined => getDollhouse().rooms.find(r => r.id === id);
+    useEffect(() => {
+        const raw = localStorage.getItem(CUSTOM_FURNITURE_KEY);
+        if (!raw) return;
+        try {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) setCustomAssets(parsed);
+        } catch {
+            setCustomAssets([]);
+        }
+    }, []);
+
+    useEffect(() => {
+        const mainRoom = dh.rooms.find(r => r.id === MAIN_ROOM_ID);
+        if (!mainRoom || shopState.staff.length === 0) return;
+
+        const mainHasStaff = mainRoom.staffIds.length > 0;
+        const staffIdsInAnyRoom = dh.rooms.flatMap(r => r.staffIds);
+        const missingStaff = shopState.staff.filter(s => !staffIdsInAnyRoom.includes(s.id)).map(s => s.id);
+
+        if (mainHasStaff && missingStaff.length === 0) return;
+
+        const allStaffIds = shopState.staff.map(s => s.id);
+        const newRooms = dh.rooms.map(r => (
+            r.id === MAIN_ROOM_ID
+                ? { ...r, staffIds: Array.from(new Set([...allStaffIds, ...r.staffIds])) }
+                : { ...r, staffIds: r.staffIds.filter(id => !allStaffIds.includes(id)) }
+        ));
+        updateState({ ...shopState, dollhouse: { ...dh, rooms: newRooms } });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [shopState.staff.length]);
+
+    const normalizedRooms = useMemo(() => dh.rooms.map(room => (
+        room.id === MAIN_ROOM_ID ? { ...room, name: '咖啡店' } : room
+    )), [dh.rooms]);
+
+    const roomOrder = ['room-2f-left', 'room-1f-left', 'room-1f-right', 'room-2f-right'];
+    const orderedRooms = roomOrder
+        .map(id => normalizedRooms.find(r => r.id === id))
+        .filter((room): room is DollhouseRoom => Boolean(room));
+
+    const [activeRoomId, setActiveRoomId] = useState<string>(MAIN_ROOM_ID);
+    const activeRoom = orderedRooms.find(r => r.id === activeRoomId) || orderedRooms[0];
+    const activeRoomIndex = orderedRooms.findIndex(r => r.id === activeRoom.id);
+
     const getLayout = (layoutId: string): RoomLayout | undefined => ROOM_LAYOUTS.find(l => l.id === layoutId);
 
-    // --- Zoom (double-tap to fill screen) ---
-    const handleRoomTap = (roomId: string) => {
-        const room = getRoom(roomId);
-        if (!room || !room.isUnlocked || isAnimating) return;
-        setIsAnimating(true);
-        setZoomedRoomId(roomId);
-        setTimeout(() => setIsAnimating(false), 400);
-    };
-
-    const handleZoomOut = () => {
-        if (isAnimating) return;
-        setIsAnimating(true);
-        setEditMode('none');
-        setZoomedRoomId(null);
-        setTimeout(() => setIsAnimating(false), 400);
-    };
-
-    // --- Unlock Room ---
     const handleUnlockRoom = async (roomId: string) => {
         const cost = ROOM_UNLOCK_COSTS[roomId] || 150;
         if (shopState.actionPoints < cost) {
             addToast(`AP 不足 (需 ${cost})`, 'error');
             return;
         }
-        const dh = getDollhouse();
         const newRooms = dh.rooms.map(r =>
             r.id === roomId ? {
                 ...r,
@@ -104,92 +131,24 @@ const BankDollhouse: React.FC<Props> = ({
         addToast(`房间已解锁！-${cost} AP`, 'success');
     };
 
-    // --- Change Layout ---
-    const handleChangeLayout = async (roomId: string, layoutId: string) => {
-        const layout = getLayout(layoutId);
-        if (!layout) return;
-        if (layout.apCost > 0 && shopState.actionPoints < layout.apCost) {
-            addToast(`AP 不足 (需 ${layout.apCost})`, 'error');
+    const handleRenameRoom = async (room: DollhouseRoom) => {
+        if (room.id === MAIN_ROOM_ID) {
+            addToast('初始房间固定为「咖啡店」', 'error');
             return;
         }
-        const dh = getDollhouse();
-        const newRooms = dh.rooms.map(r =>
-            r.id === roomId ? { ...r, layoutId } : r
-        );
-        const apCost = layout.apCost > 0 ? layout.apCost : 0;
-        await updateState({
-            ...shopState,
-            actionPoints: shopState.actionPoints - apCost,
-            dollhouse: { ...dh, rooms: newRooms }
+        const nextName = window.prompt('给房间起个新名字（最多10字）', room.name);
+        if (!nextName) return;
+        const name = nextName.trim().slice(0, 10);
+        if (!name) return;
+        await saveDollhouse({
+            ...dh,
+            rooms: dh.rooms.map(r => r.id === room.id ? { ...r, name } : r)
         });
-        setShowLayoutPicker(null);
-        if (apCost > 0) addToast(`房型已更换！-${apCost} AP`, 'success');
-        else addToast('房型已更换！', 'success');
+        addToast('房间名已更新', 'success');
     };
 
-    // --- Wallpaper / Floor ---
-    const handleSetWallpaper = async (roomId: string, surface: 'leftWall' | 'rightWall', style: string) => {
-        const dh = getDollhouse();
-        const newRooms = dh.rooms.map(r => {
-            if (r.id !== roomId) return r;
-            if (surface === 'leftWall') return { ...r, wallpaperLeft: style };
-            return { ...r, wallpaperRight: style };
-        });
-        await saveDollhouse({ ...dh, rooms: newRooms });
-    };
-
-    const handleSetFloor = async (roomId: string, style: string) => {
-        const dh = getDollhouse();
-        const newRooms = dh.rooms.map(r =>
-            r.id === roomId ? { ...r, floorStyle: style } : r
-        );
-        await saveDollhouse({ ...dh, rooms: newRooms });
-    };
-
-    // --- Stickers ---
-    const handleAddSticker = async (roomId: string, stickerUrl: string, surface: 'floor' | 'leftWall' | 'rightWall') => {
-        const dh = getDollhouse();
-        const newSticker: DollhouseSticker = {
-            id: `stk-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-            url: stickerUrl,
-            x: 50,
-            y: 50,
-            scale: 1,
-            rotation: 0,
-            zIndex: 10,
-            surface,
-        };
-        const newRooms = dh.rooms.map(r =>
-            r.id === roomId ? { ...r, stickers: [...r.stickers, newSticker] } : r
-        );
-        await saveDollhouse({ ...dh, rooms: newRooms });
-    };
-
-    const handleUpdateSticker = async (roomId: string, stickerId: string, updates: Partial<DollhouseSticker>) => {
-        const dh = getDollhouse();
-        const newRooms = dh.rooms.map(r => {
-            if (r.id !== roomId) return r;
-            return {
-                ...r,
-                stickers: r.stickers.map(s => s.id === stickerId ? { ...s, ...updates } : s)
-            };
-        });
-        await saveDollhouse({ ...dh, rooms: newRooms });
-    };
-
-    const handleDeleteSticker = async (roomId: string, stickerId: string) => {
-        const dh = getDollhouse();
-        const newRooms = dh.rooms.map(r => {
-            if (r.id !== roomId) return r;
-            return { ...r, stickers: r.stickers.filter(s => s.id !== stickerId) };
-        });
-        await saveDollhouse({ ...dh, rooms: newRooms });
-    };
-
-    // --- Staff movement (room-local coordinates) ---
     const handleFloorClick = (roomId: string, e: React.MouseEvent<HTMLDivElement>) => {
-        if (editMode !== 'none') return;
-        const room = getRoom(roomId);
+        const room = dh.rooms.find(r => r.id === roomId);
         if (!room || !room.isUnlocked) return;
 
         const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -197,21 +156,16 @@ const BankDollhouse: React.FC<Props> = ({
         const yPct = Math.max(10, Math.min(90, ((e.clientY - rect.top) / rect.height) * 100));
 
         const staffInRoom = shopState.staff.filter(s => {
-            const dh = getDollhouse();
-            const r = dh.rooms.find(rm => rm.staffIds.includes(s.id));
-            return r?.id === roomId;
+            const target = dh.rooms.find(rm => rm.staffIds.includes(s.id));
+            return target?.id === roomId;
         });
         const staffToMove = staffInRoom[0] || shopState.staff[0];
         if (!staffToMove) return;
 
-        const dh = getDollhouse();
         const needsRoomAssign = !dh.rooms.some(r => r.staffIds.includes(staffToMove.id) && r.id === roomId);
-
-        const newStaff = shopState.staff.map(s =>
-            s.id === staffToMove.id ? { ...s, x: xPct, y: yPct } : s
-        );
-
+        const newStaff = shopState.staff.map(s => s.id === staffToMove.id ? { ...s, x: xPct, y: yPct } : s);
         let newRooms = dh.rooms;
+
         if (needsRoomAssign) {
             newRooms = dh.rooms.map(r => ({
                 ...r,
@@ -221,649 +175,410 @@ const BankDollhouse: React.FC<Props> = ({
             }));
         }
 
-        updateState({
-            ...shopState,
-            staff: newStaff,
-            dollhouse: { ...dh, rooms: newRooms }
+        updateState({ ...shopState, staff: newStaff, dollhouse: { ...dh, rooms: newRooms } });
+    };
+
+    const handleSetWallpaper = async (roomId: string, style: string) => {
+        await saveDollhouse({
+            ...dh,
+            rooms: dh.rooms.map(r => r.id === roomId ? { ...r, wallpaperLeft: style, wallpaperRight: style } : r)
+        });
+        addToast('墙纸已更换', 'success');
+    };
+
+    const handleSetFloor = async (roomId: string, style: string) => {
+        await saveDollhouse({
+            ...dh,
+            rooms: dh.rooms.map(r => r.id === roomId ? { ...r, floorStyle: style } : r)
+        });
+        addToast('地板已更换', 'success');
+    };
+
+    const handleAddFurniture = async (roomId: string, stickerUrl: string, surface: 'floor' | 'leftWall') => {
+        const newSticker: DollhouseSticker = {
+            id: `stk-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+            url: stickerUrl,
+            x: 50,
+            y: surface === 'leftWall' ? 45 : 55,
+            scale: 1,
+            rotation: 0,
+            zIndex: 10,
+            surface,
+        };
+        await saveDollhouse({
+            ...dh,
+            rooms: dh.rooms.map(r => r.id === roomId ? { ...r, stickers: [...r.stickers, newSticker] } : r)
         });
     };
 
-    // --- Sticker drag (room-local) ---
-    const handleStickerDragStart = (sticker: DollhouseSticker, e: React.MouseEvent | React.TouchEvent) => {
-        e.stopPropagation();
-        e.preventDefault();
-        setDraggingSticker(sticker);
-        const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-        const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
-        setDragOffset({ x: clientX, y: clientY });
+    const handleDeleteSticker = async (roomId: string, stickerId: string) => {
+        await saveDollhouse({
+            ...dh,
+            rooms: dh.rooms.map(r => r.id === roomId ? { ...r, stickers: r.stickers.filter(s => s.id !== stickerId) } : r)
+        });
     };
 
-    const handleStickerDragMove = useCallback((e: MouseEvent | TouchEvent) => {
-        if (!draggingSticker || !zoomedRoomId) return;
-        const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-        const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
-        const dx = clientX - dragOffset.x;
-        const dy = clientY - dragOffset.y;
-        setDragOffset({ x: clientX, y: clientY });
-
-        const surfaceEl = document.getElementById(`surface-${draggingSticker.surface}-${zoomedRoomId}`);
-        if (!surfaceEl) return;
-        const rect = surfaceEl.getBoundingClientRect();
-        const dxPct = (dx / rect.width) * 100;
-        const dyPct = (dy / rect.height) * 100;
-
-        const newX = Math.max(0, Math.min(100, draggingSticker.x + dxPct));
-        const newY = Math.max(0, Math.min(100, draggingSticker.y + dyPct));
-
-        handleUpdateSticker(zoomedRoomId, draggingSticker.id, { x: newX, y: newY });
-        setDraggingSticker({ ...draggingSticker, x: newX, y: newY });
-    }, [draggingSticker, dragOffset, zoomedRoomId]);
-
-    const handleStickerDragEnd = useCallback(() => {
-        setDraggingSticker(null);
-    }, []);
-
-    useEffect(() => {
-        if (draggingSticker) {
-            window.addEventListener('mousemove', handleStickerDragMove);
-            window.addEventListener('mouseup', handleStickerDragEnd);
-            window.addEventListener('touchmove', handleStickerDragMove);
-            window.addEventListener('touchend', handleStickerDragEnd);
-            return () => {
-                window.removeEventListener('mousemove', handleStickerDragMove);
-                window.removeEventListener('mouseup', handleStickerDragEnd);
-                window.removeEventListener('touchmove', handleStickerDragMove);
-                window.removeEventListener('touchend', handleStickerDragEnd);
-            };
+    const handleChangeLayout = async (roomId: string, layoutId: string) => {
+        const layout = getLayout(layoutId);
+        if (!layout) return;
+        if (layout.apCost > 0 && shopState.actionPoints < layout.apCost) {
+            addToast(`AP 不足 (需 ${layout.apCost})`, 'error');
+            return;
         }
-    }, [draggingSticker, handleStickerDragMove, handleStickerDragEnd]);
 
-    // ==================== ROOM MODULE RENDERER ====================
-    // Each room is an independent module with its own local coordinate system.
-    // Layers (bottom to top): floor -> wall -> sticker_layer -> character_layer
+        await updateState({
+            ...shopState,
+            actionPoints: shopState.actionPoints - layout.apCost,
+            dollhouse: {
+                ...dh,
+                rooms: dh.rooms.map(r => r.id === roomId ? { ...r, layoutId } : r)
+            }
+        });
+        addToast('房型已更换！', 'success');
+    };
 
-    const renderRoomModule = (room: DollhouseRoom, isActive: boolean) => {
-        const layout = getLayout(room.layoutId) || ROOM_LAYOUTS[0];
+    const goPrevRoom = () => {
+        const prev = activeRoomIndex <= 0 ? orderedRooms.length - 1 : activeRoomIndex - 1;
+        setActiveRoomId(orderedRooms[prev].id);
+    };
+
+    const goNextRoom = () => {
+        const next = activeRoomIndex >= orderedRooms.length - 1 ? 0 : activeRoomIndex + 1;
+        setActiveRoomId(orderedRooms[next].id);
+    };
+
+    const persistCustomAssets = (nextAssets: CustomFurnitureAsset[]) => {
+        setCustomAssets(nextAssets);
+        localStorage.setItem(CUSTOM_FURNITURE_KEY, JSON.stringify(nextAssets));
+    };
+
+    const handleAddCustomAsset = () => {
+        if (!assetName.trim() || !assetUrl.trim()) {
+            addToast('请填写家具名称和图片', 'error');
+            return;
+        }
+        const next = [...customAssets, { id: `custom-${Date.now()}`, name: assetName.trim(), url: assetUrl.trim() }];
+        persistCustomAssets(next);
+        setAssetName('');
+        setAssetUrl('');
+        setShowAssetModal(false);
+        addToast('自定义家具已保存', 'success');
+    };
+
+    const handleDeleteCustomAsset = (id: string) => {
+        persistCustomAssets(customAssets.filter(a => a.id !== id));
+        addToast('已删除自定义家具', 'success');
+    };
+
+    const handleUploadCustomAsset = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+            if (typeof reader.result === 'string') {
+                setAssetUrl(reader.result);
+                addToast('图片已载入', 'success');
+            }
+        };
+        reader.readAsDataURL(file);
+        e.target.value = '';
+    };
+
+    const renderArrowButton = (direction: 'left' | 'right', onClick: () => void) => (
+        <button
+            onClick={onClick}
+            className="w-11 h-11 rounded-full border border-[#EED4BF] bg-gradient-to-b from-white to-[#FFF3E8] shadow-[0_6px_14px_rgba(174,123,89,0.25)] flex items-center justify-center active:scale-95 transition-transform"
+            aria-label={direction === 'left' ? '上一房间' : '下一房间'}
+        >
+            <svg viewBox="0 0 24 24" className="w-5 h-5 text-[#8B5E43]" fill="none" stroke="currentColor" strokeWidth="2.2">
+                {direction === 'left'
+                    ? <path strokeLinecap="round" strokeLinejoin="round" d="M15 4 7 12l8 8" />
+                    : <path strokeLinecap="round" strokeLinejoin="round" d="m9 4 8 8-8 8" />}
+            </svg>
+        </button>
+    );
+
+    const renderRoom = (room: DollhouseRoom, immersive = false) => {
         const locked = !room.isUnlocked;
-        const isOtherRoom = zoomedRoomId !== null && zoomedRoomId !== room.id;
+        const layout = getLayout(room.layoutId) || ROOM_LAYOUTS[0];
+        const wallBg = room.wallpaperLeft || room.wallpaperRight || 'linear-gradient(180deg, #FFF5E9, #FDE5D8)';
+        const floorBg = room.floorStyle || 'linear-gradient(135deg, #D6B48C, #C69767)';
 
-        // Styles
-        const leftWall = room.wallpaperLeft || 'linear-gradient(180deg, #F8F6F0, #EBE5D8)';
-        const rightWall = room.wallpaperRight || 'linear-gradient(180deg, #EFEDE6, #E0DCD0)';
-        const floorBg = room.floorStyle || 'linear-gradient(135deg, #E8E4D8, #D8D4C8)';
-
-        // Staff in this room
         const roomStaff = shopState.staff.filter(s => {
-            const dh = getDollhouse();
-            const r = dh.rooms.find(rm => rm.staffIds.includes(s.id));
-            if (r) return r.id === room.id;
-            if (room.id === MAIN_ROOM_ID && !dh.rooms.some(rm => rm.staffIds.includes(s.id))) return true;
-            return false;
+            const targetRoom = dh.rooms.find(rm => rm.staffIds.includes(s.id));
+            if (targetRoom) return targetRoom.id === room.id;
+            return room.id === MAIN_ROOM_ID;
         });
 
-        // Render stickers on a given surface
-        const renderStickers = (surface: 'floor' | 'leftWall' | 'rightWall') => {
-            return room.stickers.filter(s => s.surface === surface).map(sticker => (
-                <div
-                    key={sticker.id}
-                    className={`absolute select-none ${isActive ? 'cursor-grab active:cursor-grabbing' : ''} ${draggingSticker?.id === sticker.id ? 'z-50 opacity-80' : ''}`}
-                    style={{
-                        left: `${sticker.x}%`,
-                        top: `${sticker.y}%`,
-                        transform: `translate(-50%, -50%) scale(${sticker.scale * (isActive ? 1.4 : 0.9)}) rotate(${sticker.rotation}deg)`,
-                        zIndex: sticker.zIndex,
-                        fontSize: isActive ? '1.6rem' : '0.85rem',
-                    }}
-                    onMouseDown={(e) => isActive && editMode === 'sticker' && handleStickerDragStart(sticker, e)}
-                    onTouchStart={(e) => isActive && editMode === 'sticker' && handleStickerDragStart(sticker, e)}
-                    onDoubleClick={(e) => {
-                        e.stopPropagation();
-                        if (isActive && editMode === 'sticker') {
-                            handleDeleteSticker(room.id, sticker.id);
-                        }
-                    }}
-                >
-                    {sticker.url.startsWith('http') || sticker.url.startsWith('data')
-                        ? <img src={sticker.url} className="object-contain pointer-events-none" style={{ width: isActive ? 32 : 16, height: isActive ? 32 : 16 }} />
-                        : sticker.url
-                    }
-                </div>
-            ));
-        };
-
-        // Render character layer (staff on walkable area)
-        const renderCharacters = () => {
-            if (locked) return null;
-            return roomStaff.map((staff) => {
-                const sx = staff.x || 50;
-                const sy = staff.y || 60;
-                return (
-                    <div
-                        key={staff.id}
-                        className="absolute transition-all duration-700 ease-in-out cursor-pointer group"
-                        style={{
-                            left: `${sx}%`,
-                            top: `${sy}%`,
-                            transform: 'translate(-50%, -100%)',
-                            zIndex: 30,
-                        }}
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            onStaffClick?.(staff);
-                        }}
-                    >
-                        <div className="relative">
-                            <div className="absolute bottom-0 left-1/2 -translate-x-1/2 bg-black/10 rounded-full blur-[2px]"
-                                style={{ width: isActive ? 20 : 10, height: isActive ? 6 : 3 }} />
-                            {staff.fatigue > 80 && <div className="absolute -top-4 left-1/2 -translate-x-1/2 text-xs animate-bounce">💤</div>}
-                            <div className={`filter drop-shadow-md transform group-hover:scale-110 transition-transform ${isActive ? 'text-3xl' : 'text-base'}`}>
-                                {staff.avatar.startsWith('http') || staff.avatar.startsWith('data')
-                                    ? <img src={staff.avatar} className={`object-contain rounded-lg ${isActive ? 'w-10 h-10' : 'w-5 h-5'}`} />
-                                    : staff.avatar
-                                }
-                            </div>
-                            <div className={`absolute -bottom-3 left-1/2 -translate-x-1/2 whitespace-nowrap bg-white/90 backdrop-blur-sm rounded-full border border-slate-200 shadow-sm ${isActive ? 'text-[9px] px-2 py-0.5' : 'text-[6px] px-1 py-px'}`}>
-                                {staff.isPet && <span className="mr-0.5">🐾</span>}
-                                {staff.name}
-                            </div>
-                        </div>
-                    </div>
-                );
-            });
-        };
-
-        const floorH = `${FLOOR_H_RATIO * 100}%`;
-        const wallH = `${WALL_H_RATIO * 100}%`;
+        const wallStickers = room.stickers.filter(s => s.surface === 'leftWall' || s.surface === 'rightWall');
+        const floorStickers = room.stickers.filter(s => s.surface === 'floor');
 
         return (
-            <div
-                className={`relative w-full h-full select-none overflow-hidden transition-all duration-300 ease-in-out ${
-                    isOtherRoom ? 'opacity-0 pointer-events-none' : 'opacity-100'
-                } ${locked ? 'cursor-pointer' : ''}`}
-                style={{
-                    borderRadius: isActive ? 0 : 8,
-                    boxShadow: isActive
-                        ? 'none'
-                        : '0 2px 12px rgba(93,64,55,0.12), inset 0 0 0 1px rgba(141,110,99,0.15)',
-                }}
-                onDoubleClick={() => !locked && !isActive && handleRoomTap(room.id)}
-                onClick={() => locked && setShowUnlockConfirm(room.id)}
-            >
-                {/* ====== LAYER 1: WALL BACKDROP ====== */}
-                <div className="absolute top-0 left-0 right-0" style={{ height: wallH }}>
-                    {/* Left wall half */}
-                    <div
-                        id={`surface-leftWall-${room.id}`}
-                        className="absolute top-0 left-0 overflow-hidden"
-                        style={{
-                            width: '50%',
-                            height: '100%',
-                            background: locked ? 'linear-gradient(180deg, #F0F0F0, #E0E0E0)' : leftWall,
-                        }}
-                    >
-                        <div className="absolute inset-0" style={{
-                            background: 'linear-gradient(to right, rgba(0,0,0,0.04), rgba(0,0,0,0.01))',
-                        }} />
-                        <div className="absolute inset-0 opacity-[0.04]" style={{
-                            backgroundImage: 'radial-gradient(circle, rgba(0,0,0,0.3) 1px, transparent 1px)',
-                            backgroundSize: isActive ? '14px 14px' : '8px 8px',
-                        }} />
-                        {!locked && layout.hasWindow && (
-                            <div className="absolute overflow-hidden" style={{
-                                top: '15%', left: '15%', width: '60%', height: '45%',
-                                borderRadius: isActive ? 6 : 3,
-                                border: `${isActive ? 3 : 2}px solid #A09080`,
-                            }}>
-                                <div className="w-full h-full" style={{
-                                    background: 'linear-gradient(135deg, #D4EAFC, #A8D4F0, #7EC8E3)',
-                                }}>
-                                    <div className="absolute inset-0" style={{
-                                        background: 'linear-gradient(135deg, rgba(255,255,255,0.4) 0%, transparent 60%)',
-                                    }} />
-                                    <div className="absolute top-1/2 left-0 w-full bg-[#A09080]" style={{ height: isActive ? 2 : 1 }} />
-                                    <div className="absolute top-0 left-1/2 h-full bg-[#A09080]" style={{ width: isActive ? 2 : 1 }} />
-                                </div>
+            <div className={`w-full rounded-[26px] overflow-hidden border-4 border-[#FFE7D2] shadow-[0_14px_40px_rgba(214,151,103,0.35)] bg-[#FFF9F4] ${immersive ? 'max-w-[560px] mx-auto' : ''}`}>
+                <div className="relative w-full" style={{ aspectRatio: '3 / 4' }}>
+                    <div className="absolute left-0 right-0 top-0" style={{ height: `${WALL_H_RATIO * 100}%`, background: wallBg }}>
+                        <div className="absolute inset-0 opacity-20" style={{ backgroundImage: 'radial-gradient(circle at 2px 2px, #fff 1.5px, transparent 2px)', backgroundSize: '20px 20px' }} />
+                        {!locked && wallStickers.map(sticker => (
+                            <div
+                                key={sticker.id}
+                                className="absolute select-none cursor-pointer"
+                                style={{ left: `${sticker.x}%`, top: `${sticker.y}%`, transform: `translate(-50%, -50%) scale(${sticker.scale})`, zIndex: sticker.zIndex, fontSize: immersive ? '1.7rem' : '1.35rem' }}
+                                onDoubleClick={() => handleDeleteSticker(room.id, sticker.id)}
+                            >
+                                {sticker.url}
                             </div>
-                        )}
-                        {!locked && renderStickers('leftWall')}
+                        ))}
                     </div>
 
-                    {/* Right wall half */}
                     <div
-                        id={`surface-rightWall-${room.id}`}
-                        className="absolute top-0 right-0 overflow-hidden"
-                        style={{
-                            width: '50%',
-                            height: '100%',
-                            background: locked ? 'linear-gradient(180deg, #E8E8E8, #D8D8D8)' : rightWall,
-                        }}
+                        className="absolute left-0 right-0 bottom-0"
+                        style={{ height: `${FLOOR_H_RATIO * 100}%`, background: floorBg, borderTop: '3px solid rgba(156,104,64,0.22)' }}
+                        onClick={(e) => !locked && handleFloorClick(room.id, e)}
                     >
-                        <div className="absolute inset-0" style={{
-                            background: 'linear-gradient(to left, rgba(0,0,0,0.03), rgba(0,0,0,0.06))',
-                        }} />
-                        <div className="absolute inset-0 opacity-[0.04]" style={{
-                            backgroundImage: 'radial-gradient(circle, rgba(0,0,0,0.3) 1px, transparent 1px)',
-                            backgroundSize: isActive ? '14px 14px' : '8px 8px',
-                        }} />
-                        {!locked && renderStickers('rightWall')}
+                        <div className="absolute inset-0 opacity-10" style={{ backgroundImage: 'linear-gradient(0deg, rgba(0,0,0,0.2) 1px, transparent 1px),linear-gradient(90deg, rgba(0,0,0,0.2) 1px, transparent 1px)', backgroundSize: '22px 22px' }} />
+                        {!locked && layout.hasCounter && (
+                            <div className="absolute left-[11%] top-[16%] h-3 w-[34%] rounded-sm border border-[#5B3C2A]" style={{ background: 'linear-gradient(180deg, #7A5238, #5A3A29)' }} />
+                        )}
+
+                        {!locked && floorStickers.map(sticker => (
+                            <div
+                                key={sticker.id}
+                                className="absolute select-none cursor-pointer"
+                                style={{ left: `${sticker.x}%`, top: `${sticker.y}%`, transform: `translate(-50%, -50%) scale(${sticker.scale})`, zIndex: sticker.zIndex, fontSize: immersive ? '1.7rem' : '1.35rem' }}
+                                onDoubleClick={() => handleDeleteSticker(room.id, sticker.id)}
+                            >
+                                {sticker.url}
+                            </div>
+                        ))}
                     </div>
 
-                    {/* Center seam */}
-                    <div className="absolute top-0 left-1/2 h-full" style={{
-                        width: 1,
-                        background: 'rgba(120,100,80,0.15)',
-                        transform: 'translateX(-0.5px)',
-                    }} />
-                </div>
-
-                {/* ====== LAYER 2: FLOOR ====== */}
-                <div
-                    id={`surface-floor-${room.id}`}
-                    className="absolute left-0 right-0 bottom-0 overflow-hidden"
-                    style={{
-                        height: floorH,
-                        background: locked ? 'linear-gradient(135deg, #E0E0E0, #D0D0D0)' : floorBg,
-                        borderTop: '2px solid rgba(120,100,80,0.2)',
-                    }}
-                    onClick={(e) => !locked && !isOtherRoom && handleFloorClick(room.id, e)}
-                >
-                    <div className="absolute inset-0 opacity-[0.08]" style={{
-                        backgroundImage: `
-                            linear-gradient(0deg, rgba(0,0,0,0.2) 1px, transparent 1px),
-                            linear-gradient(90deg, rgba(0,0,0,0.2) 1px, transparent 1px)
-                        `,
-                        backgroundSize: isActive ? '24px 24px' : '14px 14px',
-                    }} />
-                    {!locked && layout.hasCounter && (
-                        <div className="absolute" style={{
-                            width: '35%',
-                            height: isActive ? 14 : 8,
-                            left: '10%',
-                            top: '15%',
-                            background: 'linear-gradient(180deg, #6D4C41, #4E342E)',
-                            border: '1px solid #3E2723',
-                            borderRadius: 2,
-                        }} />
-                    )}
-                    {!locked && renderStickers('floor')}
-                </div>
-
-                {/* ====== LAYER 3: CHARACTER LAYER ====== */}
-                <div
-                    className="absolute left-0 right-0 bottom-0 pointer-events-none"
-                    style={{ height: floorH }}
-                >
-                    <div className="relative w-full h-full pointer-events-auto">
-                        {renderCharacters()}
-                    </div>
-                </div>
-
-                {/* ====== LOCK OVERLAY ====== */}
-                {locked && (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center z-40 bg-black/5">
-                        <div className="bg-white/70 backdrop-blur-[2px] rounded-xl px-3 py-2 flex flex-col items-center shadow-lg">
-                            <div className="text-2xl mb-0.5">🔒</div>
-                            <div className="text-[9px] font-bold text-slate-500">{ROOM_UNLOCK_COSTS[room.id] || 150} AP</div>
-                            <div className="text-[7px] text-slate-400">点击解锁</div>
+                    {!locked && roomStaff.map(staff => (
+                        <div
+                            key={staff.id}
+                            className="absolute cursor-pointer"
+                            style={{ left: `${staff.x || 50}%`, top: `${staff.y || 72}%`, transform: 'translate(-50%, -100%)', zIndex: 30 }}
+                            onClick={(e) => { e.stopPropagation(); onStaffClick?.(staff); }}
+                        >
+                            <div className={`${immersive ? 'text-4xl' : 'text-3xl'} drop-shadow-md`}>{staff.avatar}</div>
+                            <div className="mt-1 px-2 py-0.5 rounded-full bg-white/90 border border-[#F2D5BE] text-[10px] font-bold text-[#8A5A3D]">{staff.name}</div>
                         </div>
-                    </div>
-                )}
+                    ))}
 
-                {/* ====== ROOM NAME LABEL ====== */}
-                <div className={`absolute left-1/2 -translate-x-1/2 whitespace-nowrap ${isActive ? 'text-[11px]' : 'text-[8px]'} font-bold ${locked ? 'text-slate-400' : 'text-[#8D6E63]'} bg-white/80 backdrop-blur-sm px-2 py-0.5 rounded-full border ${locked ? 'border-slate-200' : 'border-[#E8DCC8]'} shadow-sm z-40`}
-                    style={{ top: 4 }}>
-                    {layout.icon} {room.name}
+                    {locked && (
+                        <button
+                            onClick={() => setShowUnlockConfirm(room.id)}
+                            className="absolute inset-0 z-40 bg-black/20 backdrop-blur-[1px] flex items-center justify-center"
+                        >
+                            <div className="bg-white/90 px-4 py-3 rounded-2xl shadow-lg text-center">
+                                <div className="text-2xl">🔒</div>
+                                <div className="text-sm font-bold text-[#8A5A3D]">解锁 {ROOM_UNLOCK_COSTS[room.id] || 150} AP</div>
+                            </div>
+                        </button>
+                    )}
+
+                    <button
+                        onClick={() => setShowFullscreen(true)}
+                        className="absolute top-2 right-2 z-50 w-9 h-9 rounded-full bg-white/90 border border-[#EFD5BF] shadow flex items-center justify-center"
+                        aria-label="全屏房间"
+                    >
+                        <svg viewBox="0 0 24 24" className="w-4 h-4 text-[#8A5A3D]" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M8 3H4v4M16 3h4v4M8 21H4v-4M20 21h-4v-4" />
+                        </svg>
+                    </button>
                 </div>
             </div>
         );
     };
 
-    // ==================== SCENE LAYOUT ====================
-    // 两列布局，参照手绘图：
-    //   左列: D(上,较矮) + A(下,最高/咖啡店)
-    //   右列: C(上,较矮) + B(下,较高)
-    // 所有房间竖向(portrait)，高度 > 宽度
-    // 双击聚焦时房间铺满整个容器
-
-    const dh = getDollhouse();
-    const zoomedRoom = zoomedRoomId ? getRoom(zoomedRoomId) : null;
-
-    // 房间映射: A=大厅(1f-left), B=后厨(1f-right), C=VIP(2f-right), D=休息室(2f-left)
-    const roomA = dh.rooms.find(r => r.id === 'room-1f-left');   // 咖啡店主房间
-    const roomB = dh.rooms.find(r => r.id === 'room-1f-right');  // 自定义
-    const roomC = dh.rooms.find(r => r.id === 'room-2f-right');  // 自定义
-    const roomD = dh.rooms.find(r => r.id === 'room-2f-left');   // 自定义
-
-    // 无限AP（测试用）
-    const handleInfiniteAP = async () => {
-        await updateState({ ...shopState, actionPoints: shopState.actionPoints + 9999 });
-        addToast('+9999 AP!', 'success');
-    };
+    const builtinFurniture = STICKER_LIBRARY.map(s => ({ id: s.id, name: s.name, url: s.url, category: s.category }));
 
     return (
-        <div
-            className="relative w-full overflow-hidden select-none"
-            style={{
-                height: '65vh',
-                background: 'linear-gradient(180deg, #FEF7E8 0%, #FDF2DC 40%, #E8DCC8 100%)',
-            }}
-        >
-            {/* === 聚焦视图：房间铺满整个容器 === */}
-            {zoomedRoomId && zoomedRoom && (
-                <div className="absolute inset-0 z-30">
-                    {renderRoomModule(zoomedRoom, true)}
+        <div className="relative w-full px-3 pt-3 pb-4 rounded-2xl" style={{ minHeight: 'calc(100vh - 180px)', background: 'linear-gradient(180deg, #FFF5ED 0%, #FFEEDB 100%)' }}>
+            <div className="flex items-center justify-between mb-2">
+                {renderArrowButton('left', goPrevRoom)}
+                <div className="text-center">
+                    <div className="text-xs text-[#B07A59] font-bold">当前房间</div>
+                    <div className="text-base font-black text-[#7A5238]">{activeRoom.name}</div>
                 </div>
-            )}
-
-            {/* === 总览：两列竖向布局 === */}
-            {!zoomedRoomId && (
-                <div
-                    className="absolute inset-0 flex pt-12 pb-3 px-3"
-                    style={{ gap: ROOM_GAP }}
-                >
-                    {/* 左列: D(上) + A(下，更高) */}
-                    <div className="flex-1 flex flex-col min-h-0" style={{ gap: ROOM_GAP }}>
-                        {roomD && (
-                            <div style={{ flex: 2 }}>
-                                {renderRoomModule(roomD, false)}
-                            </div>
-                        )}
-                        {roomA && (
-                            <div style={{ flex: 3 }}>
-                                {renderRoomModule(roomA, false)}
-                            </div>
-                        )}
-                    </div>
-                    {/* 右列: C(上) + B(下，更高) */}
-                    <div className="flex-1 flex flex-col min-h-0" style={{ gap: ROOM_GAP }}>
-                        {roomC && (
-                            <div style={{ flex: 2 }}>
-                                {renderRoomModule(roomC, false)}
-                            </div>
-                        )}
-                        {roomB && (
-                            <div style={{ flex: 3 }}>
-                                {renderRoomModule(roomB, false)}
-                            </div>
-                        )}
-                    </div>
-                </div>
-            )}
-
-            {/* === HUD: 左上角人气 === */}
-            <div className="absolute top-3 left-3 z-40">
-                <div className="bg-white/70 backdrop-blur-xl px-3 py-1.5 rounded-xl shadow-lg border border-white/50 flex items-center gap-2">
-                    <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-[#FFD54F] to-[#FFB300] flex items-center justify-center shadow-md">
-                        <span className="text-sm">✨</span>
-                    </div>
-                    <div className="flex flex-col">
-                        <span className="text-[8px] text-[#8D6E63] font-medium uppercase tracking-wider">人气</span>
-                        <span className="text-base font-black text-[#5D4037] leading-none">{shopState.appeal}</span>
-                    </div>
-                </div>
+                {renderArrowButton('right', goNextRoom)}
             </div>
 
-            {/* === HUD: 右上角情报志 === */}
-            <button
-                onClick={(e) => { e.stopPropagation(); onOpenGuestbook(); }}
-                className="absolute top-3 right-3 z-40 group hover:scale-105 active:scale-95 transition-all"
-            >
-                <div className="bg-gradient-to-b from-[#6D4C41] to-[#5D4037] w-11 h-13 rounded-xl shadow-xl flex flex-col items-center justify-center gap-0.5 border border-[#8D6E63]/50 px-1 py-2">
-                    <div className="text-lg">📖</div>
-                    <div className="text-[6px] font-bold text-[#D7CCC8]">情报志</div>
-                </div>
-            </button>
-
-            {/* === DEBUG: 无限AP按钮（测试用） === */}
-            <button
-                onClick={handleInfiniteAP}
-                className="absolute top-3 left-1/2 -translate-x-1/2 z-40 bg-red-500/80 backdrop-blur-sm text-white text-[10px] font-bold px-3 py-1.5 rounded-full shadow-lg active:scale-95 transition-all"
-            >
-                +9999 AP
-            </button>
-
-            {/* === ZOOM OUT BUTTON === */}
-            {zoomedRoomId && (
+            <div className="mb-2 flex justify-center gap-2">
                 <button
-                    onClick={handleZoomOut}
-                    className="absolute top-3 left-1/2 -translate-x-1/2 z-50 bg-white/90 backdrop-blur-sm px-4 py-2 rounded-full shadow-lg border border-[#E8DCC8] flex items-center gap-2 hover:bg-white active:scale-95 transition-all"
+                    onClick={() => setShowRoomMap(v => !v)}
+                    className="px-3 py-1.5 rounded-full bg-[#7A5238] text-white text-xs font-bold shadow"
                 >
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-4 h-4 text-[#8D6E63]">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="m2.25 12 8.954-8.955a1.126 1.126 0 0 1 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" />
-                    </svg>
-                    <span className="text-xs font-bold text-[#5D4037]">返回全景</span>
+                    {showRoomMap ? '收起房间地图' : '展开房间地图'}
                 </button>
-            )}
+                <button
+                    onClick={() => { setShowDecorPanel(true); setDecorTab('furniture'); }}
+                    className="px-3 py-1.5 rounded-full bg-gradient-to-r from-[#FF9A75] to-[#FF7D6A] text-white text-xs font-bold shadow"
+                >
+                    🛠️ 装修
+                </button>
+                <button onClick={onOpenGuestbook} className="px-3 py-1.5 rounded-full bg-white/90 text-[#7A5238] text-xs font-bold border border-[#F4D8BE]">📖 情报志</button>
+            </div>
 
-            {/* === EDIT TOOLBAR (when a room is focused) === */}
-            {zoomedRoomId && zoomedRoom?.isUnlocked && (
-                <div className="absolute bottom-3 left-3 right-3 z-50">
-                    <div className="flex items-center gap-1.5 mb-2 justify-center">
-                        {[
-                            { mode: 'none' as const, icon: '👆', label: '浏览' },
-                            { mode: 'sticker' as const, icon: '🎨', label: '贴纸' },
-                            { mode: 'wallpaper' as const, icon: '🖼️', label: '墙纸' },
-                            { mode: 'floor' as const, icon: '🪵', label: '地板' },
-                        ].map(item => (
+            {showRoomMap && (
+                <div className="mb-3 p-2 rounded-2xl bg-white/75 border border-[#F7DCC3] shadow-sm">
+                    <div className="grid grid-cols-2 gap-2">
+                        {orderedRooms.map(room => (
                             <button
-                                key={item.mode}
-                                onClick={() => setEditMode(item.mode)}
-                                className={`flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-bold transition-all ${
-                                    editMode === item.mode
-                                        ? 'bg-[#5D4037] text-white shadow-lg scale-105'
-                                        : 'bg-white/80 text-[#8D6E63] shadow-sm hover:bg-white'
-                                }`}
+                                key={room.id}
+                                onClick={() => setActiveRoomId(room.id)}
+                                className={`p-2 rounded-xl text-left border ${activeRoom.id === room.id ? 'bg-[#FFF1E4] border-[#F0B887]' : 'bg-white border-[#F3E1CF]'}`}
                             >
-                                <span>{item.icon}</span>
-                                <span>{item.label}</span>
+                                <div className="text-[11px] font-bold text-[#8A5A3D] truncate">{room.name}</div>
+                                <div className="text-[10px] text-[#B1896D]">{room.isUnlocked ? '已解锁' : `🔒 ${ROOM_UNLOCK_COSTS[room.id] || 150} AP`}</div>
                             </button>
                         ))}
-                        <button
-                            onClick={() => setShowLayoutPicker(zoomedRoomId)}
-                            className="flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-bold bg-white/80 text-[#8D6E63] shadow-sm hover:bg-white transition-all"
-                        >
-                            <span>🏠</span>
-                            <span>房型</span>
-                        </button>
                     </div>
-
-                    {editMode === 'sticker' && (
-                        <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-xl border border-[#E8DCC8] p-3 max-h-[35vh] overflow-y-auto">
-                            <div className="flex gap-1 mb-2">
-                                {(['floor', 'leftWall', 'rightWall'] as const).map(s => (
-                                    <button
-                                        key={s}
-                                        onClick={() => setEditSurface(s)}
-                                        className={`px-2 py-1 rounded-lg text-[10px] font-bold transition-all ${
-                                            editSurface === s ? 'bg-[#5D4037] text-white' : 'bg-[#FDF6E3] text-[#8D6E63]'
-                                        }`}
-                                    >
-                                        {s === 'floor' ? '地板' : s === 'leftWall' ? '左墙' : '右墙'}
-                                    </button>
-                                ))}
-                            </div>
-                            <div className="flex gap-1 mb-2 overflow-x-auto no-scrollbar">
-                                {['decor', 'wall', 'furniture', 'food', 'floor', 'pet'].map(cat => (
-                                    <button
-                                        key={cat}
-                                        onClick={() => setStickerTab(cat)}
-                                        className={`px-2 py-0.5 rounded-full text-[9px] font-bold whitespace-nowrap transition-all ${
-                                            stickerTab === cat ? 'bg-[#FFE0B2] text-[#E65100]' : 'bg-slate-100 text-slate-500'
-                                        }`}
-                                    >
-                                        {cat === 'decor' ? '装饰' : cat === 'wall' ? '墙饰' : cat === 'furniture' ? '家具' : cat === 'food' ? '食物' : cat === 'floor' ? '地面' : '宠物'}
-                                    </button>
-                                ))}
-                            </div>
-                            <div className="grid grid-cols-6 gap-2">
-                                {STICKER_LIBRARY.filter(s => s.category === stickerTab).map(sticker => (
-                                    <button
-                                        key={sticker.id}
-                                        onClick={() => handleAddSticker(zoomedRoomId!, sticker.url, editSurface)}
-                                        className="w-10 h-10 rounded-xl bg-[#FDF6E3] hover:bg-[#FFE0B2] flex items-center justify-center text-xl transition-all hover:scale-110 active:scale-95 border border-[#E8DCC8]"
-                                        title={sticker.name}
-                                    >
-                                        {sticker.url}
-                                    </button>
-                                ))}
-                            </div>
-                            <p className="text-[9px] text-center text-[#BCAAA4] mt-2">点击添加 | 拖拽移动 | 双击删除</p>
-                        </div>
-                    )}
-
-                    {editMode === 'wallpaper' && (
-                        <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-xl border border-[#E8DCC8] p-3">
-                            <div className="flex gap-1 mb-2">
-                                {(['leftWall', 'rightWall'] as const).map(s => (
-                                    <button
-                                        key={s}
-                                        onClick={() => setEditSurface(s)}
-                                        className={`px-3 py-1 rounded-lg text-[10px] font-bold transition-all ${
-                                            editSurface === s ? 'bg-[#5D4037] text-white' : 'bg-[#FDF6E3] text-[#8D6E63]'
-                                        }`}
-                                    >
-                                        {s === 'leftWall' ? '左墙' : '右墙'}
-                                    </button>
-                                ))}
-                            </div>
-                            <div className="grid grid-cols-4 gap-2">
-                                {WALLPAPER_PRESETS.map(wp => (
-                                    <button
-                                        key={wp.id}
-                                        onClick={() => handleSetWallpaper(
-                                            zoomedRoomId!,
-                                            editSurface === 'leftWall' ? 'leftWall' : 'rightWall',
-                                            wp.style
-                                        )}
-                                        className="flex flex-col items-center gap-1 group"
-                                    >
-                                        <div
-                                            className="w-12 h-12 rounded-lg border-2 border-[#E8DCC8] group-hover:border-[#FF7043] transition-all shadow-sm group-hover:scale-105"
-                                            style={{ background: wp.style }}
-                                        />
-                                        <span className="text-[8px] text-[#8D6E63] font-medium">{wp.name}</span>
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-
-                    {editMode === 'floor' && (
-                        <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-xl border border-[#E8DCC8] p-3">
-                            <div className="grid grid-cols-3 gap-2">
-                                {FLOOR_PRESETS.map(fl => (
-                                    <button
-                                        key={fl.id}
-                                        onClick={() => handleSetFloor(zoomedRoomId!, fl.style)}
-                                        className="flex flex-col items-center gap-1 group"
-                                    >
-                                        <div
-                                            className="w-14 h-10 rounded-lg border-2 border-[#E8DCC8] group-hover:border-[#FF7043] transition-all shadow-sm group-hover:scale-105"
-                                            style={{ background: fl.style }}
-                                        />
-                                        <span className="text-[8px] text-[#8D6E63] font-medium">{fl.name}</span>
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-                    )}
                 </div>
             )}
 
-            {/* === UNLOCK CONFIRM MODAL === */}
+            {renderRoom(activeRoom)}
+
+            {showDecorPanel && (
+                <div className="absolute inset-0 z-[80] bg-black/35 flex items-end" onClick={() => setShowDecorPanel(false)}>
+                    <div
+                        className="w-full rounded-t-3xl bg-white p-3 max-h-[62vh] overflow-y-auto"
+                        onClick={(e) => e.stopPropagation()}
+                        style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}
+                    >
+                        <div className="flex items-center justify-between mb-2">
+                            <div className="text-sm font-black text-[#7A5238]">装修面板</div>
+                            <button onClick={() => setShowDecorPanel(false)} className="px-2 py-1 text-xs rounded-lg bg-[#F4E6DA] text-[#8A5A3D]">完成</button>
+                        </div>
+
+                        <div className="grid grid-cols-5 gap-1.5 mb-3">
+                            {[
+                                { id: 'layout', label: '房型' },
+                                { id: 'rename', label: '改名' },
+                                { id: 'wallpaper', label: '墙纸' },
+                                { id: 'furniture', label: '家具' },
+                                { id: 'floor', label: '地板' },
+                            ].map(tab => (
+                                <button
+                                    key={tab.id}
+                                    onClick={() => setDecorTab(tab.id as DecorTab)}
+                                    className={`py-2 rounded-xl text-xs font-bold ${decorTab === tab.id ? 'bg-[#7A5238] text-white' : 'bg-[#FDF0E4] text-[#8A5A3D]'}`}
+                                >
+                                    {tab.label}
+                                </button>
+                            ))}
+                        </div>
+
+                        {decorTab === 'layout' && (
+                            <div className="space-y-2">
+                                {ROOM_LAYOUTS.map(layout => (
+                                    <button key={layout.id} onClick={() => handleChangeLayout(activeRoom.id, layout.id)} className="w-full p-2 rounded-xl border border-[#F3E0CE] flex items-center gap-2 text-left">
+                                        <span className="text-xl">{layout.icon}</span>
+                                        <span className="text-xs font-bold text-[#7A5238]">{layout.name}</span>
+                                        <span className="ml-auto text-[10px] text-[#B1896D]">{layout.apCost > 0 ? `${layout.apCost} AP` : '免费'}</span>
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+
+                        {decorTab === 'rename' && (
+                            <button onClick={() => handleRenameRoom(activeRoom)} className="w-full py-3 rounded-xl bg-[#FDEBDD] border border-[#F1D1B2] text-[#7A5238] text-sm font-bold">给当前房间改名</button>
+                        )}
+
+                        {decorTab === 'wallpaper' && (
+                            <div className="grid grid-cols-2 gap-2">
+                                {WALLPAPER_PRESETS.map(wp => (
+                                    <button key={wp.id} onClick={() => handleSetWallpaper(activeRoom.id, wp.style)} className="rounded-xl border border-[#F2D2B6] p-2 text-left">
+                                        <div className="h-8 rounded-lg mb-1" style={{ background: wp.style }} />
+                                        <div className="text-[10px] font-bold text-[#7A5238]">{wp.name}</div>
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+
+                        {decorTab === 'floor' && (
+                            <div className="grid grid-cols-2 gap-2">
+                                {FLOOR_PRESETS.map(fl => (
+                                    <button key={fl.id} onClick={() => handleSetFloor(activeRoom.id, fl.style)} className="rounded-xl border border-[#F2D2B6] p-2 text-left">
+                                        <div className="h-8 rounded-lg mb-1" style={{ background: fl.style }} />
+                                        <div className="text-[10px] font-bold text-[#7A5238]">{fl.name}</div>
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+
+                        {decorTab === 'furniture' && (
+                            <>
+                                <div className="mb-2 flex gap-2">
+                                    <button onClick={() => setShowAssetModal(true)} className="px-3 py-1.5 rounded-lg bg-[#FF8E6B] text-white text-xs font-bold">+ 上传/添加家具</button>
+                                </div>
+                                <div className="grid grid-cols-5 gap-1.5">
+                                    {builtinFurniture.map(sticker => (
+                                        <button
+                                            key={sticker.id}
+                                            onClick={() => handleAddFurniture(activeRoom.id, sticker.url, sticker.category === 'wall' ? 'leftWall' : 'floor')}
+                                            className="h-12 rounded-lg bg-[#FFF4E8] border border-[#F2D2B6] text-xl"
+                                            title={sticker.name}
+                                        >
+                                            {sticker.url}
+                                        </button>
+                                    ))}
+                                    {customAssets.map(asset => (
+                                        <div key={asset.id} className="relative">
+                                            <button
+                                                onClick={() => handleAddFurniture(activeRoom.id, asset.url, 'floor')}
+                                                className="h-12 w-full rounded-lg bg-[#FFF4E8] border border-[#F2D2B6] text-[0] overflow-hidden"
+                                                title={asset.name}
+                                            >
+                                                <img src={asset.url} className="w-full h-full object-cover" />
+                                            </button>
+                                            <button onClick={() => handleDeleteCustomAsset(asset.id)} className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-[#FF6B6B] text-white text-[10px] leading-none">×</button>
+                                        </div>
+                                    ))}
+                                </div>
+                                <p className="mt-2 text-[10px] text-[#A67E62]">提示：双击房间里的家具可删除。</p>
+                            </>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {showAssetModal && (
+                <div className="absolute inset-0 z-[90] bg-black/35 flex items-center justify-center" onClick={() => setShowAssetModal(false)}>
+                    <div className="w-[90%] bg-white rounded-2xl p-3" onClick={e => e.stopPropagation()}>
+                        <div className="text-sm font-bold text-[#7A5238] mb-2">添加自定义家具</div>
+                        <input value={assetName} onChange={(e) => setAssetName(e.target.value)} placeholder="家具名" className="w-full mb-2 px-2 py-2 rounded-lg border border-[#E9D0BD] text-sm" />
+                        <input value={assetUrl} onChange={(e) => setAssetUrl(e.target.value)} placeholder="图床URL 或本地上传" className="w-full mb-2 px-2 py-2 rounded-lg border border-[#E9D0BD] text-sm" />
+                        <div className="flex gap-2 mb-2">
+                            <button onClick={() => fileInputRef.current?.click()} className="flex-1 py-2 rounded-lg bg-[#F7E8DB] text-[#7A5238] text-xs font-bold">上传本地图片</button>
+                            <button onClick={handleAddCustomAsset} className="flex-1 py-2 rounded-lg bg-[#FF8E6B] text-white text-xs font-bold">保存</button>
+                        </div>
+                        <input ref={fileInputRef} type="file" accept="image/*" onChange={handleUploadCustomAsset} className="hidden" />
+                    </div>
+                </div>
+            )}
+
+            {showFullscreen && (
+                <div className="fixed inset-0 z-[100] bg-[#2B1B13] p-3 overflow-y-auto">
+                    <div className="max-w-[680px] mx-auto">
+                        <div className="mb-3 flex justify-end">
+                            <button onClick={() => setShowFullscreen(false)} className="px-3 py-1.5 rounded-lg bg-white/90 text-[#7A5238] text-xs font-bold">退出全屏</button>
+                        </div>
+                        {renderRoom(activeRoom, true)}
+                    </div>
+                </div>
+            )}
+
             {showUnlockConfirm && (() => {
-                const room = getRoom(showUnlockConfirm);
+                const room = dh.rooms.find(r => r.id === showUnlockConfirm);
                 const cost = ROOM_UNLOCK_COSTS[showUnlockConfirm] || 150;
                 return (
-                    <div className="absolute inset-0 z-[60] flex items-center justify-center bg-black/30 backdrop-blur-[2px]"
-                         onClick={() => setShowUnlockConfirm(null)}>
-                        <div className="bg-white rounded-2xl shadow-2xl p-5 mx-6 max-w-[280px] w-full"
-                             onClick={e => e.stopPropagation()}>
-                            <div className="text-center mb-4">
-                                <div className="text-4xl mb-2">🔓</div>
-                                <h3 className="font-bold text-lg text-[#5D4037]">解锁 {room?.name || '新房间'}？</h3>
-                                <p className="text-xs text-[#A1887F] mt-1">
-                                    消耗 <span className="font-bold text-[#FF7043]">{cost} AP</span> 解锁这个空间
-                                </p>
-                                <p className="text-[10px] text-[#BCAAA4] mt-1">
-                                    当前 AP: {shopState.actionPoints}
-                                </p>
-                            </div>
+                    <div className="absolute inset-0 z-[70] bg-black/35 flex items-center justify-center" onClick={() => setShowUnlockConfirm(null)}>
+                        <div className="w-[88%] bg-white rounded-2xl p-4" onClick={e => e.stopPropagation()}>
+                            <div className="text-center text-[#7A5238] font-bold mb-3">解锁「{room?.name || '房间'}」需要 {cost} AP</div>
                             <div className="flex gap-2">
-                                <button
-                                    onClick={() => setShowUnlockConfirm(null)}
-                                    className="flex-1 py-3 rounded-xl bg-[#EFEBE9] text-[#8D6E63] font-bold text-sm active:scale-95 transition-all"
-                                >
-                                    取消
-                                </button>
-                                <button
-                                    onClick={() => handleUnlockRoom(showUnlockConfirm)}
-                                    disabled={shopState.actionPoints < cost}
-                                    className={`flex-1 py-3 rounded-xl font-bold text-sm transition-all ${
-                                        shopState.actionPoints >= cost
-                                            ? 'bg-gradient-to-r from-[#FF8A65] to-[#FF7043] text-white shadow-lg active:scale-95'
-                                            : 'bg-slate-200 text-slate-400'
-                                    }`}
-                                >
-                                    解锁 ✨
-                                </button>
+                                <button className="flex-1 py-2 rounded-xl bg-[#F1E6DD]" onClick={() => setShowUnlockConfirm(null)}>取消</button>
+                                <button className="flex-1 py-2 rounded-xl bg-[#FF8C63] text-white" onClick={() => handleUnlockRoom(showUnlockConfirm)}>解锁</button>
                             </div>
-                        </div>
-                    </div>
-                );
-            })()}
-
-            {/* === LAYOUT PICKER MODAL === */}
-            {showLayoutPicker && (() => {
-                const room = getRoom(showLayoutPicker);
-                return (
-                    <div className="absolute inset-0 z-[60] flex items-end justify-center bg-black/30 backdrop-blur-[2px]"
-                         onClick={() => setShowLayoutPicker(null)}>
-                        <div className="bg-white rounded-t-2xl shadow-2xl p-4 w-full max-h-[60%] overflow-y-auto"
-                             onClick={e => e.stopPropagation()}>
-                            <div className="text-center mb-3">
-                                <h3 className="font-bold text-base text-[#5D4037]">🏠 更换房型</h3>
-                                <p className="text-[10px] text-[#A1887F]">为「{room?.name}」选择新的布局</p>
-                            </div>
-                            <div className="space-y-2">
-                                {ROOM_LAYOUTS.map(layout => {
-                                    const isCurrent = room?.layoutId === layout.id;
-                                    return (
-                                        <button
-                                            key={layout.id}
-                                            onClick={() => !isCurrent && handleChangeLayout(showLayoutPicker, layout.id)}
-                                            className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all ${
-                                                isCurrent
-                                                    ? 'bg-[#FFF3E0] border-2 border-[#FF7043]'
-                                                    : 'bg-[#FDF6E3] border border-[#E8DCC8] hover:border-[#FFB74D]'
-                                            }`}
-                                        >
-                                            <div className="w-10 h-10 rounded-lg bg-white flex items-center justify-center text-2xl shadow-sm">
-                                                {layout.icon}
-                                            </div>
-                                            <div className="flex-1 text-left">
-                                                <div className="flex items-center gap-2">
-                                                    <span className="font-bold text-sm text-[#5D4037]">{layout.name}</span>
-                                                    {isCurrent && <span className="text-[8px] bg-[#FF7043] text-white px-1.5 py-0.5 rounded-full font-bold">当前</span>}
-                                                </div>
-                                                <p className="text-[10px] text-[#A1887F]">{layout.description}</p>
-                                            </div>
-                                            {layout.apCost > 0 && !isCurrent && (
-                                                <div className="text-xs font-bold text-[#FF7043]">{layout.apCost} AP</div>
-                                            )}
-                                            {layout.apCost === 0 && !isCurrent && (
-                                                <div className="text-xs font-bold text-green-500">免费</div>
-                                            )}
-                                        </button>
-                                    );
-                                })}
-                            </div>
-                            <button
-                                onClick={() => setShowLayoutPicker(null)}
-                                className="w-full mt-3 py-3 rounded-xl bg-[#EFEBE9] text-[#8D6E63] font-bold text-sm active:scale-95 transition-all"
-                            >
-                                关闭
-                            </button>
                         </div>
                     </div>
                 );
