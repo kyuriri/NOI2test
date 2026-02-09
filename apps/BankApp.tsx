@@ -531,6 +531,8 @@ ${previousGuestbook}
                         }}
                         onStaffClick={handleOpenStaffEdit}
                         onOpenGuestbook={() => setShowGuestbook(true)}
+                        onRefreshVisitor={handleRefreshGuestbook}
+                        isRefreshingVisitor={isRefreshingGuestbook}
                     />
                 )}
 

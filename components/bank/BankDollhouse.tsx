@@ -7,6 +7,7 @@ import {
     ROOM_LAYOUTS, WALLPAPER_PRESETS, FLOOR_PRESETS, STICKER_LIBRARY, INITIAL_DOLLHOUSE
 } from './BankGameConstants';
 import { useOS } from '../../context/OSContext';
+import { DB } from '../../utils/db';
 
 const ROOM_UNLOCK_COSTS: Record<string, number> = {
     'room-1f-left': 0,
@@ -18,7 +19,7 @@ const ROOM_UNLOCK_COSTS: Record<string, number> = {
 const MAIN_ROOM_ID = 'room-1f-left';
 const FLOOR_H_RATIO = 0.3;
 const WALL_H_RATIO = 0.7;
-const CUSTOM_FURNITURE_KEY = 'bank_custom_furniture_assets_v1';
+const CUSTOM_FURNITURE_ASSET_KEY = 'bank_custom_furniture_assets_v1';
 
 type DecorTab = 'layout' | 'rename' | 'wallpaper' | 'furniture' | 'floor';
 
@@ -36,10 +37,12 @@ interface Props {
     updateState: (s: BankShopState) => Promise<void>;
     onStaffClick?: (staff: ShopStaff) => void;
     onOpenGuestbook: () => void;
+    onRefreshVisitor?: () => void;
+    isRefreshingVisitor?: boolean;
 }
 
 const BankDollhouse: React.FC<Props> = ({
-    shopState, updateState, onStaffClick, onOpenGuestbook
+    shopState, characters, updateState, onStaffClick, onOpenGuestbook, onRefreshVisitor, isRefreshingVisitor = false
 }) => {
     const { addToast } = useOS();
     const [showUnlockConfirm, setShowUnlockConfirm] = useState<string | null>(null);
@@ -62,14 +65,31 @@ const BankDollhouse: React.FC<Props> = ({
     };
 
     useEffect(() => {
-        const raw = localStorage.getItem(CUSTOM_FURNITURE_KEY);
-        if (!raw) return;
-        try {
-            const parsed = JSON.parse(raw);
-            if (Array.isArray(parsed)) setCustomAssets(parsed);
-        } catch {
-            setCustomAssets([]);
-        }
+        const loadAssets = async () => {
+            try {
+                const fromDb = await DB.getAsset(CUSTOM_FURNITURE_ASSET_KEY);
+                if (fromDb) {
+                    const parsed = JSON.parse(fromDb);
+                    if (Array.isArray(parsed)) {
+                        setCustomAssets(parsed);
+                        return;
+                    }
+                }
+
+                // Migrate old localStorage data if exists
+                const legacy = localStorage.getItem(CUSTOM_FURNITURE_ASSET_KEY);
+                if (!legacy) return;
+                const parsed = JSON.parse(legacy);
+                if (Array.isArray(parsed)) {
+                    setCustomAssets(parsed);
+                    await DB.saveAsset(CUSTOM_FURNITURE_ASSET_KEY, JSON.stringify(parsed));
+                    localStorage.removeItem(CUSTOM_FURNITURE_ASSET_KEY);
+                }
+            } catch {
+                setCustomAssets([]);
+            }
+        };
+        loadAssets();
     }, []);
 
     useEffect(() => {
@@ -247,18 +267,18 @@ const BankDollhouse: React.FC<Props> = ({
         setActiveRoomId(orderedRooms[next].id);
     };
 
-    const persistCustomAssets = (nextAssets: CustomFurnitureAsset[]) => {
+    const persistCustomAssets = async (nextAssets: CustomFurnitureAsset[]) => {
         setCustomAssets(nextAssets);
-        localStorage.setItem(CUSTOM_FURNITURE_KEY, JSON.stringify(nextAssets));
+        await DB.saveAsset(CUSTOM_FURNITURE_ASSET_KEY, JSON.stringify(nextAssets));
     };
 
-    const handleAddCustomAsset = () => {
+    const handleAddCustomAsset = async () => {
         if (!assetName.trim() || !assetUrl.trim()) {
             addToast('请填写家具名称和图片', 'error');
             return;
         }
         const next = [...customAssets, { id: `custom-${Date.now()}`, name: assetName.trim(), url: assetUrl.trim() }];
-        persistCustomAssets(next);
+        await persistCustomAssets(next);
         setAssetName('');
         setAssetUrl('');
         setShowAssetModal(false);
@@ -266,7 +286,7 @@ const BankDollhouse: React.FC<Props> = ({
     };
 
     const handleDeleteCustomAsset = (id: string) => {
-        persistCustomAssets(customAssets.filter(a => a.id !== id));
+        void persistCustomAssets(customAssets.filter(a => a.id !== id));
         addToast('已删除自定义家具', 'success');
     };
 
@@ -392,6 +412,8 @@ const BankDollhouse: React.FC<Props> = ({
 
     const builtinFurniture = STICKER_LIBRARY.map(s => ({ id: s.id, name: s.name, url: s.url, category: s.category }));
 
+    const visitorChar = characters.find(c => c.id === shopState.activeVisitor?.charId);
+
     return (
         <div className="relative w-full px-3 pt-3 pb-4 rounded-2xl" style={{ minHeight: 'calc(100vh - 180px)', background: 'linear-gradient(180deg, #FFF5ED 0%, #FFEEDB 100%)' }}>
             <div className="flex items-center justify-between mb-2">
@@ -416,7 +438,40 @@ const BankDollhouse: React.FC<Props> = ({
                 >
                     🛠️ 装修
                 </button>
-                <button onClick={onOpenGuestbook} className="px-3 py-1.5 rounded-full bg-white/90 text-[#7A5238] text-xs font-bold border border-[#F4D8BE]">📖 情报志</button>
+            </div>
+
+            <div className="mb-3 rounded-2xl border border-[#F4D8BE] bg-gradient-to-r from-[#FFE8CE] to-[#FFDDBA] p-3 shadow-md">
+                <div className="flex items-center justify-between gap-2">
+                    <button
+                        onClick={onOpenGuestbook}
+                        className="flex-1 rounded-xl bg-gradient-to-r from-[#8D6E63] to-[#6D4C41] text-white px-3 py-3 text-sm font-black shadow"
+                    >
+                        📖 打开情报志
+                    </button>
+                    <button
+                        onClick={() => onRefreshVisitor?.()}
+                        disabled={!onRefreshVisitor || isRefreshingVisitor}
+                        className={`rounded-xl px-3 py-3 text-xs font-bold shadow ${
+                            isRefreshingVisitor
+                                ? 'bg-[#EFEBE9] text-[#BCAAA4]'
+                                : 'bg-gradient-to-r from-[#42A5F5] to-[#1E88E5] text-white'
+                        }`}
+                    >
+                        {isRefreshingVisitor ? '刷新中...' : '刷新访客'}
+                    </button>
+                </div>
+                <div className="mt-2 flex items-center gap-2 text-xs text-[#7A5238]">
+                    <span className="font-bold">当前访客：</span>
+                    {visitorChar ? (
+                        <>
+                            <img src={visitorChar.sprites?.chibi || visitorChar.avatar} className="w-7 h-7 rounded-lg object-cover border border-white/70" />
+                            <span className="font-bold">{visitorChar.name}</span>
+                            <span className="text-[11px] text-[#9D745A] truncate">{shopState.activeVisitor?.message || '来店里逛逛~'}</span>
+                        </>
+                    ) : (
+                        <span className="text-[#9D745A]">暂无访客，点“刷新访客”邀请一个吧</span>
+                    )}
+                </div>
             </div>
 
             {showRoomMap && (
