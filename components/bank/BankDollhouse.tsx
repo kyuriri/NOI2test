@@ -16,9 +16,7 @@ const ROOM_UNLOCK_COSTS: Record<string, number> = {
     'room-2f-right': 300,
 };
 
-// Room module dimensions (Fallout Shelter style)
-const ROOM_W = 280;
-const ROOM_H = 180;
+const MAIN_ROOM_ID = 'room-1f-left';
 const FLOOR_H_RATIO = 0.3;   // bottom 30% is walkable floor
 const WALL_H_RATIO = 0.7;    // top 70% is wall backdrop
 const ROOM_GAP = 6;
@@ -63,7 +61,7 @@ const BankDollhouse: React.FC<Props> = ({
     const getRoom = (id: string): DollhouseRoom | undefined => getDollhouse().rooms.find(r => r.id === id);
     const getLayout = (layoutId: string): RoomLayout | undefined => ROOM_LAYOUTS.find(l => l.id === layoutId);
 
-    // --- Zoom (tap a room to focus) ---
+    // --- Zoom (double-tap to fill screen) ---
     const handleRoomTap = (roomId: string) => {
         const room = getRoom(roomId);
         if (!room || !room.isUnlocked || isAnimating) return;
@@ -195,7 +193,6 @@ const BankDollhouse: React.FC<Props> = ({
         if (!room || !room.isUnlocked) return;
 
         const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-        // x,y as percentage within the walkable floor area
         const xPct = Math.max(5, Math.min(95, ((e.clientX - rect.left) / rect.width) * 100));
         const yPct = Math.max(10, Math.min(90, ((e.clientY - rect.top) / rect.height) * 100));
 
@@ -249,7 +246,6 @@ const BankDollhouse: React.FC<Props> = ({
         const dy = clientY - dragOffset.y;
         setDragOffset({ x: clientX, y: clientY });
 
-        // Find the surface element within the room module
         const surfaceEl = document.getElementById(`surface-${draggingSticker.surface}-${zoomedRoomId}`);
         if (!surfaceEl) return;
         const rect = surfaceEl.getBoundingClientRect();
@@ -284,19 +280,12 @@ const BankDollhouse: React.FC<Props> = ({
 
     // ==================== ROOM MODULE RENDERER ====================
     // Each room is an independent module with its own local coordinate system.
-    // Layers (bottom to top): floor -> wall -> furniture_layer -> sticker_layer -> character_layer
-    // No shared geometry with other rooms.
+    // Layers (bottom to top): floor -> wall -> sticker_layer -> character_layer
 
-    const renderRoomModule = (room: DollhouseRoom, isZoomed: boolean) => {
+    const renderRoomModule = (room: DollhouseRoom, isActive: boolean) => {
         const layout = getLayout(room.layoutId) || ROOM_LAYOUTS[0];
         const locked = !room.isUnlocked;
         const isOtherRoom = zoomedRoomId !== null && zoomedRoomId !== room.id;
-        const isActive = zoomedRoomId === room.id;
-
-        const w = isZoomed && isActive ? ROOM_W * 1.8 : ROOM_W;
-        const h = isZoomed && isActive ? ROOM_H * 1.8 : ROOM_H;
-        const floorAreaH = h * FLOOR_H_RATIO;
-        const wallAreaH = h * WALL_H_RATIO;
 
         // Styles
         const leftWall = room.wallpaperLeft || 'linear-gradient(180deg, #F8F6F0, #EBE5D8)';
@@ -308,7 +297,7 @@ const BankDollhouse: React.FC<Props> = ({
             const dh = getDollhouse();
             const r = dh.rooms.find(rm => rm.staffIds.includes(s.id));
             if (r) return r.id === room.id;
-            if (room.id === 'room-1f-left' && !dh.rooms.some(rm => rm.staffIds.includes(s.id))) return true;
+            if (room.id === MAIN_ROOM_ID && !dh.rooms.some(rm => rm.staffIds.includes(s.id))) return true;
             return false;
         });
 
@@ -323,7 +312,7 @@ const BankDollhouse: React.FC<Props> = ({
                         top: `${sticker.y}%`,
                         transform: `translate(-50%, -50%) scale(${sticker.scale * (isActive ? 1.4 : 0.9)}) rotate(${sticker.rotation}deg)`,
                         zIndex: sticker.zIndex,
-                        fontSize: isActive ? '1.4rem' : '0.85rem',
+                        fontSize: isActive ? '1.6rem' : '0.85rem',
                     }}
                     onMouseDown={(e) => isActive && editMode === 'sticker' && handleStickerDragStart(sticker, e)}
                     onTouchStart={(e) => isActive && editMode === 'sticker' && handleStickerDragStart(sticker, e)}
@@ -335,7 +324,7 @@ const BankDollhouse: React.FC<Props> = ({
                     }}
                 >
                     {sticker.url.startsWith('http') || sticker.url.startsWith('data')
-                        ? <img src={sticker.url} className="object-contain pointer-events-none" style={{ width: isActive ? 28 : 16, height: isActive ? 28 : 16 }} />
+                        ? <img src={sticker.url} className="object-contain pointer-events-none" style={{ width: isActive ? 32 : 16, height: isActive ? 32 : 16 }} />
                         : sticker.url
                     }
                 </div>
@@ -346,7 +335,6 @@ const BankDollhouse: React.FC<Props> = ({
         const renderCharacters = () => {
             if (locked) return null;
             return roomStaff.map((staff) => {
-                // Staff x,y are percentages within the walkable floor area
                 const sx = staff.x || 50;
                 const sy = staff.y || 60;
                 return (
@@ -365,20 +353,16 @@ const BankDollhouse: React.FC<Props> = ({
                         }}
                     >
                         <div className="relative">
-                            {/* Shadow */}
                             <div className="absolute bottom-0 left-1/2 -translate-x-1/2 bg-black/10 rounded-full blur-[2px]"
-                                style={{ width: isActive ? 18 : 10, height: isActive ? 5 : 3 }} />
-                            {/* Fatigue indicator */}
+                                style={{ width: isActive ? 20 : 10, height: isActive ? 6 : 3 }} />
                             {staff.fatigue > 80 && <div className="absolute -top-4 left-1/2 -translate-x-1/2 text-xs animate-bounce">💤</div>}
-                            {/* Avatar */}
-                            <div className={`filter drop-shadow-md transform group-hover:scale-110 transition-transform ${isActive ? 'text-2xl' : 'text-base'}`}>
+                            <div className={`filter drop-shadow-md transform group-hover:scale-110 transition-transform ${isActive ? 'text-3xl' : 'text-base'}`}>
                                 {staff.avatar.startsWith('http') || staff.avatar.startsWith('data')
-                                    ? <img src={staff.avatar} className={`object-contain rounded-lg ${isActive ? 'w-8 h-8' : 'w-5 h-5'}`} />
+                                    ? <img src={staff.avatar} className={`object-contain rounded-lg ${isActive ? 'w-10 h-10' : 'w-5 h-5'}`} />
                                     : staff.avatar
                                 }
                             </div>
-                            {/* Name label */}
-                            <div className={`absolute -bottom-3 left-1/2 -translate-x-1/2 whitespace-nowrap bg-white/90 backdrop-blur-sm rounded-full border border-slate-200 shadow-sm ${isActive ? 'text-[8px] px-1.5 py-0.5' : 'text-[6px] px-1 py-px'}`}>
+                            <div className={`absolute -bottom-3 left-1/2 -translate-x-1/2 whitespace-nowrap bg-white/90 backdrop-blur-sm rounded-full border border-slate-200 shadow-sm ${isActive ? 'text-[9px] px-2 py-0.5' : 'text-[6px] px-1 py-px'}`}>
                                 {staff.isPet && <span className="mr-0.5">🐾</span>}
                                 {staff.name}
                             </div>
@@ -388,26 +372,25 @@ const BankDollhouse: React.FC<Props> = ({
             });
         };
 
+        const floorH = `${FLOOR_H_RATIO * 100}%`;
+        const wallH = `${WALL_H_RATIO * 100}%`;
+
         return (
             <div
-                key={room.id}
-                className={`relative select-none overflow-hidden transition-all duration-400 ease-in-out ${
-                    isOtherRoom ? 'opacity-10 pointer-events-none scale-95' : 'opacity-100'
+                className={`relative w-full h-full select-none overflow-hidden transition-all duration-300 ease-in-out ${
+                    isOtherRoom ? 'opacity-0 pointer-events-none' : 'opacity-100'
                 } ${locked ? 'cursor-pointer' : ''}`}
                 style={{
-                    width: w,
-                    height: h,
-                    borderRadius: isActive ? 12 : 8,
+                    borderRadius: isActive ? 0 : 8,
                     boxShadow: isActive
-                        ? '0 8px 32px rgba(93,64,55,0.25), inset 0 0 0 2px rgba(255,112,67,0.4)'
+                        ? 'none'
                         : '0 2px 12px rgba(93,64,55,0.12), inset 0 0 0 1px rgba(141,110,99,0.15)',
                 }}
                 onDoubleClick={() => !locked && !isActive && handleRoomTap(room.id)}
                 onClick={() => locked && setShowUnlockConfirm(room.id)}
             >
                 {/* ====== LAYER 1: WALL BACKDROP ====== */}
-                {/* Two halves: left wall and right wall, side by side */}
-                <div className="absolute top-0 left-0 right-0" style={{ height: wallAreaH }}>
+                <div className="absolute top-0 left-0 right-0" style={{ height: wallH }}>
                     {/* Left wall half */}
                     <div
                         id={`surface-leftWall-${room.id}`}
@@ -418,16 +401,13 @@ const BankDollhouse: React.FC<Props> = ({
                             background: locked ? 'linear-gradient(180deg, #F0F0F0, #E0E0E0)' : leftWall,
                         }}
                     >
-                        {/* Depth shading */}
                         <div className="absolute inset-0" style={{
                             background: 'linear-gradient(to right, rgba(0,0,0,0.04), rgba(0,0,0,0.01))',
                         }} />
-                        {/* Subtle dot pattern */}
                         <div className="absolute inset-0 opacity-[0.04]" style={{
                             backgroundImage: 'radial-gradient(circle, rgba(0,0,0,0.3) 1px, transparent 1px)',
                             backgroundSize: isActive ? '14px 14px' : '8px 8px',
                         }} />
-                        {/* Window (if layout has one) */}
                         {!locked && layout.hasWindow && (
                             <div className="absolute overflow-hidden" style={{
                                 top: '15%', left: '15%', width: '60%', height: '45%',
@@ -445,7 +425,6 @@ const BankDollhouse: React.FC<Props> = ({
                                 </div>
                             </div>
                         )}
-                        {/* Sticker layer for left wall */}
                         {!locked && renderStickers('leftWall')}
                     </div>
 
@@ -469,7 +448,7 @@ const BankDollhouse: React.FC<Props> = ({
                         {!locked && renderStickers('rightWall')}
                     </div>
 
-                    {/* Center seam (wall join line) */}
+                    {/* Center seam */}
                     <div className="absolute top-0 left-1/2 h-full" style={{
                         width: 1,
                         background: 'rgba(120,100,80,0.15)',
@@ -482,13 +461,12 @@ const BankDollhouse: React.FC<Props> = ({
                     id={`surface-floor-${room.id}`}
                     className="absolute left-0 right-0 bottom-0 overflow-hidden"
                     style={{
-                        height: floorAreaH,
+                        height: floorH,
                         background: locked ? 'linear-gradient(135deg, #E0E0E0, #D0D0D0)' : floorBg,
                         borderTop: '2px solid rgba(120,100,80,0.2)',
                     }}
                     onClick={(e) => !locked && !isOtherRoom && handleFloorClick(room.id, e)}
                 >
-                    {/* Floor grid lines for depth */}
                     <div className="absolute inset-0 opacity-[0.08]" style={{
                         backgroundImage: `
                             linear-gradient(0deg, rgba(0,0,0,0.2) 1px, transparent 1px),
@@ -496,8 +474,6 @@ const BankDollhouse: React.FC<Props> = ({
                         `,
                         backgroundSize: isActive ? '24px 24px' : '14px 14px',
                     }} />
-
-                    {/* Counter (if layout has one) */}
                     {!locked && layout.hasCounter && (
                         <div className="absolute" style={{
                             width: '35%',
@@ -509,16 +485,13 @@ const BankDollhouse: React.FC<Props> = ({
                             borderRadius: 2,
                         }} />
                     )}
-
-                    {/* Sticker layer for floor */}
                     {!locked && renderStickers('floor')}
                 </div>
 
-                {/* ====== LAYER 3: CHARACTER LAYER (on top of floor) ====== */}
-                {/* Characters are positioned relative to the floor area */}
+                {/* ====== LAYER 3: CHARACTER LAYER ====== */}
                 <div
                     className="absolute left-0 right-0 bottom-0 pointer-events-none"
-                    style={{ height: floorAreaH }}
+                    style={{ height: floorH }}
                 >
                     <div className="relative w-full h-full pointer-events-auto">
                         {renderCharacters()}
@@ -537,7 +510,7 @@ const BankDollhouse: React.FC<Props> = ({
                 )}
 
                 {/* ====== ROOM NAME LABEL ====== */}
-                <div className={`absolute left-1/2 -translate-x-1/2 whitespace-nowrap ${isActive ? 'text-[10px]' : 'text-[8px]'} font-bold ${locked ? 'text-slate-400' : 'text-[#8D6E63]'} bg-white/80 backdrop-blur-sm px-2 py-0.5 rounded-full border ${locked ? 'border-slate-200' : 'border-[#E8DCC8]'} shadow-sm z-40`}
+                <div className={`absolute left-1/2 -translate-x-1/2 whitespace-nowrap ${isActive ? 'text-[11px]' : 'text-[8px]'} font-bold ${locked ? 'text-slate-400' : 'text-[#8D6E63]'} bg-white/80 backdrop-blur-sm px-2 py-0.5 rounded-full border ${locked ? 'border-slate-200' : 'border-[#E8DCC8]'} shadow-sm z-40`}
                     style={{ top: 4 }}>
                     {layout.icon} {room.name}
                 </div>
@@ -546,21 +519,15 @@ const BankDollhouse: React.FC<Props> = ({
     };
 
     // ==================== SCENE LAYOUT ====================
-    // Rooms are arranged in a grid: 2 columns x N floors
-    // Each room is an independent module with spacing between them.
-    // An optional static building shell wraps the grid for decoration.
+    // Mobile-first vertical layout:
+    //   - Main room (大厅): full-width, taller
+    //   - Sub-rooms: 2-column grid, smaller
+    // When zoomed: selected room fills entire container
 
     const dh = getDollhouse();
     const zoomedRoom = zoomedRoomId ? getRoom(zoomedRoomId) : null;
-
-    // Group rooms by floor (descending: top floors first)
-    const floors = new Map<number, DollhouseRoom[]>();
-    dh.rooms.forEach(r => {
-        const arr = floors.get(r.floor) || [];
-        arr.push(r);
-        floors.set(r.floor, arr);
-    });
-    const floorNumbers = Array.from(floors.keys()).sort((a, b) => b - a); // top floor first
+    const mainRoom = dh.rooms.find(r => r.id === MAIN_ROOM_ID);
+    const subRooms = dh.rooms.filter(r => r.id !== MAIN_ROOM_ID);
 
     return (
         <div
@@ -570,87 +537,38 @@ const BankDollhouse: React.FC<Props> = ({
                 background: 'linear-gradient(180deg, #FEF7E8 0%, #FDF2DC 40%, #E8DCC8 100%)',
             }}
         >
-            {/* === BUILDING SHELL (decorative outer frame) === */}
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-0">
-                <div style={{
-                    width: ROOM_W * 2 + ROOM_GAP + 40,
-                    height: floorNumbers.length * (ROOM_H + ROOM_GAP) + 80,
-                    border: '3px solid rgba(141,110,99,0.15)',
-                    borderRadius: 16,
-                    background: 'rgba(255,248,235,0.3)',
-                }}>
-                    {/* Roof decoration */}
-                    <div className="relative w-full flex justify-center" style={{ marginTop: -28 }}>
-                        <svg width={ROOM_W * 2 + ROOM_GAP + 20} height={36} viewBox={`0 0 ${ROOM_W * 2 + ROOM_GAP + 20} 36`}>
-                            <polygon
-                                points={`${(ROOM_W * 2 + ROOM_GAP + 20) / 2},2 ${ROOM_W * 2 + ROOM_GAP + 15},30 5,30`}
-                                fill="url(#shellRoof)"
-                                stroke="#8B7355"
-                                strokeWidth="1.5"
-                                opacity="0.6"
-                            />
-                            <defs>
-                                <linearGradient id="shellRoof" x1="0" y1="0" x2="1" y2="1">
-                                    <stop offset="0%" stopColor="#C4A882" />
-                                    <stop offset="100%" stopColor="#8B7355" />
-                                </linearGradient>
-                            </defs>
-                        </svg>
-                        <div className="absolute inset-0 flex items-center justify-center">
-                            <span className="text-[9px] font-bold text-[#8B7355]/70 tracking-wider mt-1">
-                                {shopState.shopName}
-                            </span>
+            {/* === ZOOMED VIEW: room fills entire container === */}
+            {zoomedRoomId && zoomedRoom && (
+                <div className="absolute inset-0 z-30 transition-all duration-300">
+                    {renderRoomModule(zoomedRoom, true)}
+                </div>
+            )}
+
+            {/* === OVERVIEW: scrollable vertical layout === */}
+            {!zoomedRoomId && (
+                <div
+                    className="absolute inset-0 overflow-y-auto overflow-x-hidden px-3 pt-12 pb-3"
+                    style={{ WebkitOverflowScrolling: 'touch' }}
+                >
+                    <div className="flex flex-col" style={{ gap: ROOM_GAP }}>
+                        {/* Main room - full width, taller */}
+                        {mainRoom && (
+                            <div style={{ width: '100%', height: 200 }}>
+                                {renderRoomModule(mainRoom, false)}
+                            </div>
+                        )}
+
+                        {/* Sub-rooms - 2-column grid, shorter */}
+                        <div className="grid grid-cols-2" style={{ gap: ROOM_GAP }}>
+                            {subRooms.map(room => (
+                                <div key={room.id} style={{ height: 140 }}>
+                                    {renderRoomModule(room, false)}
+                                </div>
+                            ))}
                         </div>
                     </div>
                 </div>
-            </div>
-
-            {/* === ROOM GRID (the actual interactive content) === */}
-            <div
-                className="absolute inset-0 flex items-center justify-center transition-all duration-400 ease-in-out"
-                style={{
-                    transform: zoomedRoomId ? (() => {
-                        const room = getRoom(zoomedRoomId);
-                        if (!room) return 'scale(1)';
-                        // Scale up and center on the zoomed room
-                        return 'scale(1)';
-                    })() : 'scale(1)',
-                }}
-            >
-                <div
-                    className="flex flex-col items-center transition-all duration-400"
-                    style={{ gap: ROOM_GAP }}
-                >
-                    {floorNumbers.map(floorNum => {
-                        const roomsOnFloor = floors.get(floorNum) || [];
-                        // Sort: left before right
-                        roomsOnFloor.sort((a, b) => (a.position === 'left' ? -1 : 1));
-
-                        return (
-                            <div
-                                key={`floor-${floorNum}`}
-                                className="flex items-center"
-                                style={{ gap: ROOM_GAP }}
-                            >
-                                {/* Floor label */}
-                                <div className="flex flex-col items-center justify-center mr-1" style={{ width: 16 }}>
-                                    <span className="text-[8px] font-bold text-[#BCAAA4] writing-mode-vertical" style={{
-                                        writingMode: 'vertical-rl',
-                                        textOrientation: 'mixed',
-                                    }}>
-                                        {floorNum === 0 ? '1F' : `${floorNum + 1}F`}
-                                    </span>
-                                </div>
-                                {roomsOnFloor.map(room => (
-                                    <div key={room.id}>
-                                        {renderRoomModule(room, zoomedRoomId !== null)}
-                                    </div>
-                                ))}
-                            </div>
-                        );
-                    })}
-                </div>
-            </div>
+            )}
 
             {/* === HUD: Top-left Appeal === */}
             <div className="absolute top-3 left-3 z-40">
