@@ -18,9 +18,40 @@ type JSZipCtorLike = {
 const dynamicImport = new Function('m', 'return import(m)') as (m: string) => Promise<any>;
 let jszipCtorPromise: Promise<JSZipCtorLike> | null = null;
 
+const loadScript = (src: string): Promise<void> => new Promise((resolve, reject) => {
+  const existing = document.querySelector(`script[data-src=\"${src}\"]`) as HTMLScriptElement | null;
+  if (existing) {
+    if ((existing as any).dataset.loaded === 'true') {
+      resolve();
+      return;
+    }
+    existing.addEventListener('load', () => resolve(), { once: true });
+    existing.addEventListener('error', () => reject(new Error(`load failed: ${src}`)), { once: true });
+    return;
+  }
+
+  const script = document.createElement('script');
+  script.src = src;
+  script.async = true;
+  script.dataset.src = src;
+  script.onload = () => {
+    script.dataset.loaded = 'true';
+    resolve();
+  };
+  script.onerror = () => reject(new Error(`load failed: ${src}`));
+  document.head.appendChild(script);
+});
+
 const loadJSZip = async (): Promise<JSZipCtorLike> => {
   if (!jszipCtorPromise) {
-    jszipCtorPromise = dynamicImport('jszip').then((mod) => ((mod as any).default || mod) as JSZipCtorLike);
+    jszipCtorPromise = dynamicImport('jszip')
+      .then((mod) => ((mod as any).default || mod) as JSZipCtorLike)
+      .catch(async () => {
+        await loadScript('https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js');
+        const ctor = (window as any).JSZip as JSZipCtorLike | undefined;
+        if (!ctor) throw new Error('JSZip 加载失败');
+        return ctor;
+      });
   }
   return jszipCtorPromise;
 };

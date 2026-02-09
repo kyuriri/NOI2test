@@ -11,27 +11,58 @@ type PdfJsLike = {
     GlobalWorkerOptions?: { workerSrc?: string };
 };
 
-let pdfjsPromise: Promise<PdfJsLike> | null = null;
-let katexPromise: Promise<any> | null = null;
+type KatexLike = {
+    renderToString: (latex: string, options: any) => string;
+};
 
-const dynamicImport = new Function('m', 'return import(m)') as (m: string) => Promise<any>;
+let pdfjsPromise: Promise<PdfJsLike> | null = null;
+let katexPromise: Promise<KatexLike> | null = null;
+
+const loadScript = (src: string): Promise<void> => new Promise((resolve, reject) => {
+    const existing = document.querySelector(`script[data-src=\"${src}\"]`) as HTMLScriptElement | null;
+    if (existing) {
+        if ((existing as any).dataset.loaded === 'true') {
+            resolve();
+            return;
+        }
+        existing.addEventListener('load', () => resolve(), { once: true });
+        existing.addEventListener('error', () => reject(new Error(`load failed: ${src}`)), { once: true });
+        return;
+    }
+
+    const script = document.createElement('script');
+    script.src = src;
+    script.async = true;
+    script.dataset.src = src;
+    script.onload = () => {
+        script.dataset.loaded = 'true';
+        resolve();
+    };
+    script.onerror = () => reject(new Error(`load failed: ${src}`));
+    document.head.appendChild(script);
+});
 
 const loadPdfJs = async (): Promise<PdfJsLike> => {
     if (!pdfjsPromise) {
-        pdfjsPromise = dynamicImport('pdfjs-dist').then((mod) => {
-            const pdfjs = (mod as any).default || mod;
+        pdfjsPromise = loadScript('https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.min.js').then(() => {
+            const pdfjs = (window as any).pdfjsLib as PdfJsLike | undefined;
+            if (!pdfjs) throw new Error('pdfjs 加载失败');
             if (pdfjs?.GlobalWorkerOptions) {
                 pdfjs.GlobalWorkerOptions.workerSrc = 'https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
             }
-            return pdfjs as PdfJsLike;
+            return pdfjs;
         });
     }
     return pdfjsPromise;
 };
 
-const loadKatex = async () => {
+const loadKatex = async (): Promise<KatexLike> => {
     if (!katexPromise) {
-        katexPromise = dynamicImport('katex').then((mod) => (mod as any).default || mod);
+        katexPromise = loadScript('https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js').then(() => {
+            const katex = (window as any).katex as KatexLike | undefined;
+            if (!katex) throw new Error('KaTeX 加载失败');
+            return katex;
+        });
     }
     return katexPromise;
 };
@@ -240,7 +271,7 @@ const StudyApp: React.FC = () => {
     const [showImportModal, setShowImportModal] = useState(false);
     const [importPreference, setImportPreference] = useState('');
     const [tempPdfData, setTempPdfData] = useState<{name: string, text: string} | null>(null);
-    const [katexRenderer, setKatexRenderer] = useState<{ renderToString: (latex: string, options: any) => string } | null>(null);
+    const [katexRenderer, setKatexRenderer] = useState<KatexLike | null>(null);
 
     // Delete Confirmation State
     const [deleteTarget, setDeleteTarget] = useState<StudyCourse | null>(null);
