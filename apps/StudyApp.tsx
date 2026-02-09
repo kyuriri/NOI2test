@@ -1,20 +1,40 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import * as pdfjsLib from 'pdfjs-dist';
-import katex from 'katex';
 import { useOS } from '../context/OSContext';
 import { DB } from '../utils/db';
 import { StudyCourse, StudyChapter, CharacterProfile, Message, UserProfile } from '../types';
 import { ContextBuilder } from '../utils/context';
 import Modal from '../components/os/Modal';
 
-// Fix for pdfjs-dist ESM/CJS interop
-const pdfjs = (pdfjsLib as any).default || pdfjsLib;
+type PdfJsLike = {
+    getDocument: (src: { data: ArrayBuffer }) => { promise: Promise<any> };
+    GlobalWorkerOptions?: { workerSrc?: string };
+};
 
-// Setup PDF worker
-if (pdfjs.GlobalWorkerOptions) {
-    pdfjs.GlobalWorkerOptions.workerSrc = 'https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
-}
+let pdfjsPromise: Promise<PdfJsLike> | null = null;
+let katexPromise: Promise<any> | null = null;
+
+const dynamicImport = new Function('m', 'return import(m)') as (m: string) => Promise<any>;
+
+const loadPdfJs = async (): Promise<PdfJsLike> => {
+    if (!pdfjsPromise) {
+        pdfjsPromise = dynamicImport('pdfjs-dist').then((mod) => {
+            const pdfjs = (mod as any).default || mod;
+            if (pdfjs?.GlobalWorkerOptions) {
+                pdfjs.GlobalWorkerOptions.workerSrc = 'https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+            }
+            return pdfjs as PdfJsLike;
+        });
+    }
+    return pdfjsPromise;
+};
+
+const loadKatex = async () => {
+    if (!katexPromise) {
+        katexPromise = dynamicImport('katex').then((mod) => (mod as any).default || mod);
+    }
+    return katexPromise;
+};
 
 // --- Styles ---
 const GRADIENTS = [
@@ -28,7 +48,7 @@ const GRADIENTS = [
 
 // --- Renderer Component ---
 // Enhanced Markdown & Math Renderer
-const BlackboardRenderer: React.FC<{ text: string, isTyping?: boolean }> = ({ text, isTyping }) => {
+const BlackboardRenderer: React.FC<{ text: string, isTyping?: boolean, katexRenderer?: { renderToString: (latex: string, options: any) => string } | null }> = ({ text, isTyping, katexRenderer }) => {
     
     // Helper to render math using KaTeX
     const renderMath = (latex: string, displayMode: boolean) => {
@@ -38,11 +58,14 @@ const BlackboardRenderer: React.FC<{ text: string, isTyping?: boolean }> = ({ te
                 .replace(/\\\[/g, '') // Remove \[
                 .replace(/\\\]/g, ''); // Remove \]
 
-            const html = katex.renderToString(cleanLatex, {
+            const html = katexRenderer?.renderToString(cleanLatex, {
                 displayMode: displayMode,
                 throwOnError: false, 
                 output: 'html',
             });
+            if (!html) {
+                return <span className="font-mono text-emerald-200">{latex}</span>;
+            }
             // Force white color for KaTeX elements specifically
             return <span dangerouslySetInnerHTML={{ __html: html }} className={displayMode ? "block my-2 w-full overflow-x-auto" : "inline-block mx-1"} />;
         } catch (e) {
@@ -217,6 +240,7 @@ const StudyApp: React.FC = () => {
     const [showImportModal, setShowImportModal] = useState(false);
     const [importPreference, setImportPreference] = useState('');
     const [tempPdfData, setTempPdfData] = useState<{name: string, text: string} | null>(null);
+    const [katexRenderer, setKatexRenderer] = useState<{ renderToString: (latex: string, options: any) => string } | null>(null);
 
     // Delete Confirmation State
     const [deleteTarget, setDeleteTarget] = useState<StudyCourse | null>(null);
@@ -230,6 +254,13 @@ const StudyApp: React.FC = () => {
             setSelectedChar(char);
         }
     }, [activeCharacterId]);
+
+
+    useEffect(() => {
+        loadKatex().then(setKatexRenderer).catch(() => {
+            // KaTeX is optional in dev if dependency is absent
+        });
+    }, []);
 
     // Refresh courses when returning to bookshelf
     useEffect(() => {
@@ -289,6 +320,7 @@ const StudyApp: React.FC = () => {
 
         try {
             const arrayBuffer = await file.arrayBuffer();
+            const pdfjs = await loadPdfJs();
             const loadingTask = pdfjs.getDocument({ data: arrayBuffer });
             const pdf = await loadingTask.promise;
             
@@ -858,7 +890,7 @@ Note: Use "我" (I) to refer to yourself.
             {/* Main Text Content - Layout Optimized (Removed padding-right to allow full width) */}
             <div className="flex-1 overflow-y-auto no-scrollbar p-6 pt-20 pb-32 relative z-10">
                 <div className="max-w-[100%]">
-                    <BlackboardRenderer text={displayedText} isTyping={isTyping} />
+                    <BlackboardRenderer text={displayedText} isTyping={isTyping} katexRenderer={katexRenderer} />
                 </div>
             </div>
 
