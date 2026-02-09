@@ -21,7 +21,7 @@ const FLOOR_H_RATIO = 0.24;
 const WALL_H_RATIO = 0.76;
 const CUSTOM_FURNITURE_ASSET_KEY = 'bank_custom_furniture_assets_v1';
 
-type DecorTab = 'layout' | 'rename' | 'wallpaper' | 'furniture' | 'floor';
+type DecorTab = 'layout' | 'rename' | 'wallpaper' | 'furniture' | 'floor' | 'roomTexture';
 
 interface CustomFurnitureAsset {
     id: string;
@@ -34,7 +34,7 @@ interface Props {
     characters: CharacterProfile[];
     userProfile: UserProfile;
     apiConfig: APIConfig;
-    updateState: (s: BankShopState) => Promise<void>;
+    updateState: (updater: (prev: BankShopState) => BankShopState) => Promise<void>;
     onStaffClick?: (staff: ShopStaff) => void;
     onOpenGuestbook: () => void;
 }
@@ -58,6 +58,11 @@ const BankDollhouse: React.FC<Props> = ({
     const [assetName, setAssetName] = useState('');
     const [assetUrl, setAssetUrl] = useState('');
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const [showTextureModal, setShowTextureModal] = useState(false);
+    const [textureTarget, setTextureTarget] = useState<'room' | 'wallpaper' | 'floor'>('room');
+    const [textureUrl, setTextureUrl] = useState('');
+    const [textureScale, setTextureScale] = useState(1);
+    const textureInputRef = useRef<HTMLInputElement>(null);
 
     const getDollhouse = (): DollhouseState => shopState.dollhouse || INITIAL_DOLLHOUSE;
     const dh = getDollhouse();
@@ -68,7 +73,7 @@ const BankDollhouse: React.FC<Props> = ({
     });
 
     const saveDollhouse = async (newDH: DollhouseState) => {
-        await updateState({ ...shopState, dollhouse: newDH });
+        await updateState(prev => ({ ...prev, dollhouse: newDH }));
     };
 
     useEffect(() => {
@@ -115,7 +120,7 @@ const BankDollhouse: React.FC<Props> = ({
                 ? { ...r, staffIds: Array.from(new Set([...allStaffIds, ...r.staffIds])) }
                 : { ...r, staffIds: r.staffIds.filter(id => !allStaffIds.includes(id)) }
         ));
-        updateState({ ...shopState, dollhouse: { ...dh, rooms: newRooms } });
+        updateState(prev => ({ ...prev, dollhouse: { ...dh, rooms: newRooms } }));
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [shopState.staff.length]);
 
@@ -183,11 +188,11 @@ const BankDollhouse: React.FC<Props> = ({
                 floorStyle: 'linear-gradient(135deg, #C4A77D, #B8956E)',
             } : r
         );
-        await updateState({
-            ...shopState,
-            actionPoints: shopState.actionPoints - cost,
-            dollhouse: { ...dh, rooms: newRooms }
-        });
+        await updateState(prev => ({
+            ...prev,
+            actionPoints: prev.actionPoints - cost,
+            dollhouse: { ...(prev.dollhouse || dh), rooms: newRooms }
+        }));
         setShowUnlockConfirm(null);
         addToast(`房间已解锁！-${cost} AP`, 'success');
     };
@@ -212,15 +217,17 @@ const BankDollhouse: React.FC<Props> = ({
         const next = clampActorPos(x, y);
         if (isVisitor) {
             if (!shopState.activeVisitor || shopState.activeVisitor.charId !== actorId) return;
-            await updateState({
-                ...shopState,
-                activeVisitor: { ...shopState.activeVisitor, x: next.x, y: next.y }
-            });
+            await updateState(prev => ({
+                ...prev,
+                activeVisitor: prev.activeVisitor ? { ...prev.activeVisitor, x: next.x, y: next.y } : prev.activeVisitor,
+            }));
             return;
         }
 
-        const newStaff = shopState.staff.map(s => s.id === actorId ? { ...s, x: next.x, y: next.y } : s);
-        await updateState({ ...shopState, staff: newStaff });
+        await updateState(prev => ({
+            ...prev,
+            staff: prev.staff.map(s => s.id === actorId ? { ...s, x: next.x, y: next.y } : s)
+        }));
     };
 
     const cancelLongPress = () => {
@@ -310,14 +317,14 @@ const BankDollhouse: React.FC<Props> = ({
             return;
         }
 
-        await updateState({
-            ...shopState,
-            actionPoints: shopState.actionPoints - layout.apCost,
+        await updateState(prev => ({
+            ...prev,
+            actionPoints: prev.actionPoints - layout.apCost,
             dollhouse: {
-                ...dh,
-                rooms: dh.rooms.map(r => r.id === roomId ? { ...r, layoutId } : r)
+                ...(prev.dollhouse || dh),
+                rooms: (prev.dollhouse?.rooms || dh.rooms).map(r => r.id === roomId ? { ...r, layoutId } : r)
             }
-        });
+        }));
         addToast('房型已更换！', 'success');
     };
 
@@ -329,6 +336,54 @@ const BankDollhouse: React.FC<Props> = ({
     const goNextRoom = () => {
         const next = activeRoomIndex >= orderedRooms.length - 1 ? 0 : activeRoomIndex + 1;
         setActiveRoomId(orderedRooms[next].id);
+    };
+
+    const toCssBackground = (value?: string, fallback?: string) => {
+        const source = (value || fallback || '').trim();
+        if (!source) return fallback || 'transparent';
+        if (/gradient\(|^#|^rgb\(|^hsl\(/i.test(source)) return source;
+        return `url("${source}") center / cover no-repeat`;
+    };
+
+    const openTextureModal = (target: 'room' | 'wallpaper' | 'floor') => {
+        setTextureTarget(target);
+        setTextureUrl('');
+        setTextureScale(1);
+        setShowTextureModal(true);
+    };
+
+    const handleTextureUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+            if (typeof reader.result === 'string') {
+                setTextureUrl(reader.result);
+                addToast('贴图已载入', 'success');
+            }
+        };
+        reader.readAsDataURL(file);
+        e.target.value = '';
+    };
+
+    const handleSaveCustomTexture = async () => {
+        if (!textureUrl.trim()) {
+            addToast('请填写图床 URL 或上传本地图片', 'error');
+            return;
+        }
+        const url = textureUrl.trim();
+        if (textureTarget === 'room') {
+            await saveDollhouse({
+                ...dh,
+                rooms: dh.rooms.map(r => r.id === activeRoom.id ? { ...r, roomTextureUrl: url, roomTextureScale: textureScale } : r)
+            });
+            addToast('全屋贴图已更新', 'success');
+        } else if (textureTarget === 'wallpaper') {
+            await handleSetWallpaper(activeRoom.id, url);
+        } else {
+            await handleSetFloor(activeRoom.id, url);
+        }
+        setShowTextureModal(false);
     };
 
     const persistCustomAssets = async (nextAssets: CustomFurnitureAsset[]) => {
@@ -384,8 +439,10 @@ const BankDollhouse: React.FC<Props> = ({
 
     const renderRoom = (room: DollhouseRoom, immersive = false) => {
         const locked = !room.isUnlocked;
-        const wallBg = room.wallpaperLeft || room.wallpaperRight || 'linear-gradient(180deg, #FFF5E9, #FDE5D8)';
-        const floorBg = room.floorStyle || 'linear-gradient(135deg, #D6B48C, #C69767)';
+        const wallBg = toCssBackground(room.wallpaperLeft || room.wallpaperRight, 'linear-gradient(180deg, #FFF5E9, #FDE5D8)');
+        const floorBg = toCssBackground(room.floorStyle, 'linear-gradient(135deg, #D6B48C, #C69767)');
+        const roomTexture = room.roomTextureUrl?.trim();
+        const roomTextureScale = Math.max(0.5, Math.min(2.5, room.roomTextureScale ?? 1));
 
         const roomStaff = shopState.staff.filter(s => {
             const targetRoom = dh.rooms.find(rm => rm.staffIds.includes(s.id));
@@ -441,6 +498,22 @@ const BankDollhouse: React.FC<Props> = ({
                         ))}
                     </div>
 
+                    {!locked && roomTexture && (
+                        <div className="absolute inset-0 pointer-events-none z-20">
+                            <div
+                                className="absolute inset-0"
+                                style={{
+                                    backgroundImage: `url("${roomTexture}")`,
+                                    backgroundPosition: 'center',
+                                    backgroundRepeat: 'no-repeat',
+                                    backgroundSize: 'contain',
+                                    transform: `scale(${roomTextureScale})`,
+                                    transformOrigin: 'center center',
+                                }}
+                            />
+                        </div>
+                    )}
+
                     {!locked && roomStaff.map(staff => {
                         const pos = actorPositions[staff.id] || clampActorPos(staff.x || 50, staff.y || 72);
                         return (
@@ -451,7 +524,7 @@ const BankDollhouse: React.FC<Props> = ({
                                 onPointerDown={(e) => { e.stopPropagation(); handleActorPressStart(staff.id, room.id, false); }}
                                 onPointerUp={(e) => {
                                     e.stopPropagation();
-                                    cancelLongPress();
+                                    void handleRoomPointerUp();
                                     if (!suppressActorClickRef.current) onStaffClick?.(staff);
                                 }}
                             >
@@ -468,7 +541,7 @@ const BankDollhouse: React.FC<Props> = ({
                                 className={`absolute ${draggingActorId === visitor.id ? 'cursor-grabbing' : 'cursor-grab'} select-none transition-transform duration-700`}
                                 style={{ left: `${visitorPos.x}%`, top: `${visitorPos.y}%`, transform: 'translate(-50%, -100%)', zIndex: 35 }}
                                 onPointerDown={(e) => { e.stopPropagation(); handleActorPressStart(visitor.id, room.id, true); }}
-                                onPointerUp={(e) => { e.stopPropagation(); cancelLongPress(); }}
+                                onPointerUp={(e) => { e.stopPropagation(); void handleRoomPointerUp(); }}
                             >
                                 <img src={visitor.sprites?.chibi || visitor.avatar} className="w-10 h-10 rounded-xl object-cover border-2 border-white shadow-md" />
                                 <div className="mt-1 px-2 py-0.5 rounded-full bg-white/95 border border-[#D9C1AE] text-[10px] font-bold text-[#8A5A3D]">{visitor.name}</div>
@@ -538,13 +611,14 @@ const BankDollhouse: React.FC<Props> = ({
                             <button onClick={() => setShowDecorPanel(false)} className="px-2 py-1 text-xs rounded-lg bg-[#F4E6DA] text-[#8A5A3D]">完成</button>
                         </div>
 
-                        <div className="grid grid-cols-5 gap-1.5 mb-3">
+                        <div className="grid grid-cols-6 gap-1.5 mb-3">
                             {[
                                 { id: 'layout', label: '房型' },
                                 { id: 'rename', label: '改名' },
                                 { id: 'wallpaper', label: '墙纸' },
                                 { id: 'furniture', label: '家具' },
                                 { id: 'floor', label: '地板' },
+                                { id: 'roomTexture', label: '全屋' },
                             ].map(tab => (
                                 <button
                                     key={tab.id}
@@ -573,24 +647,51 @@ const BankDollhouse: React.FC<Props> = ({
                         )}
 
                         {decorTab === 'wallpaper' && (
-                            <div className="grid grid-cols-2 gap-2">
-                                {WALLPAPER_PRESETS.map(wp => (
-                                    <button key={wp.id} onClick={() => handleSetWallpaper(activeRoom.id, wp.style)} className="rounded-xl border border-[#F2D2B6] p-2 text-left">
-                                        <div className="h-8 rounded-lg mb-1" style={{ background: wp.style }} />
-                                        <div className="text-[10px] font-bold text-[#7A5238]">{wp.name}</div>
-                                    </button>
-                                ))}
+                            <div className="space-y-2"> 
+                                <button onClick={() => openTextureModal('wallpaper')} className="w-full py-2 rounded-xl bg-[#FFE7D4] border border-[#F2D2B6] text-[#7A5238] text-xs font-bold">上传自定义墙纸（本地/图床）</button>
+                                <div className="grid grid-cols-2 gap-2"> 
+                                    {WALLPAPER_PRESETS.map(wp => (
+                                        <button key={wp.id} onClick={() => handleSetWallpaper(activeRoom.id, wp.style)} className="rounded-xl border border-[#F2D2B6] p-2 text-left"> 
+                                            <div className="h-8 rounded-lg mb-1" style={{ background: wp.style }} />
+                                            <div className="text-[10px] font-bold text-[#7A5238]">{wp.name}</div>
+                                        </button>
+                                    ))}
+                                </div>
                             </div>
                         )}
 
                         {decorTab === 'floor' && (
-                            <div className="grid grid-cols-2 gap-2">
-                                {FLOOR_PRESETS.map(fl => (
-                                    <button key={fl.id} onClick={() => handleSetFloor(activeRoom.id, fl.style)} className="rounded-xl border border-[#F2D2B6] p-2 text-left">
-                                        <div className="h-8 rounded-lg mb-1" style={{ background: fl.style }} />
-                                        <div className="text-[10px] font-bold text-[#7A5238]">{fl.name}</div>
-                                    </button>
-                                ))}
+                            <div className="space-y-2"> 
+                                <button onClick={() => openTextureModal('floor')} className="w-full py-2 rounded-xl bg-[#FFE7D4] border border-[#F2D2B6] text-[#7A5238] text-xs font-bold">上传自定义地板（本地/图床）</button>
+                                <div className="grid grid-cols-2 gap-2"> 
+                                    {FLOOR_PRESETS.map(fl => (
+                                        <button key={fl.id} onClick={() => handleSetFloor(activeRoom.id, fl.style)} className="rounded-xl border border-[#F2D2B6] p-2 text-left"> 
+                                            <div className="h-8 rounded-lg mb-1" style={{ background: fl.style }} />
+                                            <div className="text-[10px] font-bold text-[#7A5238]">{fl.name}</div>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {decorTab === 'roomTexture' && (
+                            <div className="space-y-3"> 
+                                <button onClick={() => openTextureModal('room')} className="w-full py-2 rounded-xl bg-[#FF8E6B] text-white text-xs font-bold">上传全屋贴图（本地/图床）</button>
+                                <div className="text-[10px] text-[#8A5A3D]">当前缩放：{(activeRoom.roomTextureScale ?? 1).toFixed(2)}x</div>
+                                {activeRoom.roomTextureUrl && (
+                                    <>
+                                        <img src={activeRoom.roomTextureUrl} className="w-full h-24 object-contain rounded-lg border border-[#F2D2B6] bg-[#FFF8F2]" />
+                                        <button
+                                            onClick={async () => {
+                                                await saveDollhouse({ ...dh, rooms: dh.rooms.map(r => r.id === activeRoom.id ? { ...r, roomTextureUrl: undefined, roomTextureScale: 1 } : r) });
+                                                addToast('已清除全屋贴图', 'success');
+                                            }}
+                                            className="w-full py-2 rounded-lg bg-[#FCE4E4] text-[#AF4444] text-xs font-bold"
+                                        >
+                                            清除全屋贴图
+                                        </button>
+                                    </>
+                                )}
                             </div>
                         )}
 
@@ -641,6 +742,26 @@ const BankDollhouse: React.FC<Props> = ({
                             <button onClick={handleAddCustomAsset} className="flex-1 py-2 rounded-lg bg-[#FF8E6B] text-white text-xs font-bold">保存</button>
                         </div>
                         <input ref={fileInputRef} type="file" accept="image/*" onChange={handleUploadCustomAsset} className="hidden" />
+                    </div>
+                </div>
+            )}
+
+            {showTextureModal && (
+                <div className="absolute inset-0 z-[95] bg-black/35 flex items-center justify-center" onClick={() => setShowTextureModal(false)}>
+                    <div className="w-[90%] bg-white rounded-2xl p-3" onClick={e => e.stopPropagation()}>
+                        <div className="text-sm font-bold text-[#7A5238] mb-2">上传自定义贴图</div>
+                        <input value={textureUrl} onChange={(e) => setTextureUrl(e.target.value)} placeholder="图床URL 或本地上传" className="w-full mb-2 px-2 py-2 rounded-lg border border-[#E9D0BD] text-sm" />
+                        {textureTarget === 'room' && (
+                            <div className="mb-2">
+                                <div className="text-[11px] text-[#8A5A3D] mb-1">全屋缩放：{textureScale.toFixed(2)}x</div>
+                                <input type="range" min={0.5} max={2.5} step={0.05} value={textureScale} onChange={(e) => setTextureScale(parseFloat(e.target.value))} className="w-full" />
+                            </div>
+                        )}
+                        <div className="flex gap-2 mb-2">
+                            <button onClick={() => textureInputRef.current?.click()} className="flex-1 py-2 rounded-lg bg-[#F7E8DB] text-[#7A5238] text-xs font-bold">上传本地图片</button>
+                            <button onClick={handleSaveCustomTexture} className="flex-1 py-2 rounded-lg bg-[#FF8E6B] text-white text-xs font-bold">保存</button>
+                        </div>
+                        <input ref={textureInputRef} type="file" accept="image/*" onChange={handleTextureUpload} className="hidden" />
                     </div>
                 </div>
             )}

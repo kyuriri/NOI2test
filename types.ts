@@ -389,6 +389,8 @@ export interface DollhouseRoom {
     wallpaperLeft?: string;  // CSS gradient or image URL
     wallpaperRight?: string;
     floorStyle?: string;     // CSS gradient or image URL
+    roomTextureUrl?: string; // optional full-room overlay image
+    roomTextureScale?: number;
     stickers: DollhouseSticker[];
     staffIds: string[];      // staff assigned to this room
 }

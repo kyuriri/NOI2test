@@ -304,7 +304,10 @@ const BankApp: React.FC = () => {
     // --- Guestbook Logic (Gossip & Drama) ---
     const handleRefreshGuestbook = async () => {
         const COST = 40;
-        if (!consumeAP(COST)) return;
+        if (state.shop.actionPoints < COST) {
+            addToast(`AP 不足 (需 ${COST})。去省钱吧！`, 'error');
+            return;
+        }
         if (!apiConfig.apiKey) { addToast('需配置 API Key', 'error'); return; }
 
         setIsRefreshingGuestbook(true);
@@ -535,10 +538,16 @@ ${previousGuestbook}
                         characters={characters}
                         userProfile={userProfile}
                         apiConfig={apiConfig}
-                        updateState={async (newShopState) => {
-                            const newState = { ...state, shop: newShopState };
-                            await DB.saveBankState(newState);
-                            setState(newState);
+                        updateState={async (updater) => {
+                            let nextState: BankFullState | null = null;
+                            setState(prev => {
+                                const computed = { ...prev, shop: updater(prev.shop) };
+                                nextState = computed;
+                                return computed;
+                            });
+                            if (nextState) {
+                                await DB.saveBankState(nextState);
+                            }
                         }}
                         onStaffClick={handleOpenStaffEdit}
                         onOpenGuestbook={() => setShowGuestbook(true)}
